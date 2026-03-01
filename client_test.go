@@ -1,9 +1,9 @@
 // Sub2API Standalone ?//
 // go test -v -run TestClient -timeout 120s
 //
-//  sub2api-standalone
+//	 sub2api-standalone
 //
-//	go run . -config config.json
+//		go run . -config config.json
 package main
 
 import (

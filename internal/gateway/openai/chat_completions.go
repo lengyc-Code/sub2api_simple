@@ -31,6 +31,28 @@ func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]b
 	}
 	delete(parsed, "messages")
 
+	// Chat Completions tools -> Responses tools.
+	if tools, ok := parsed["tools"]; ok {
+		parsed["tools"] = convertChatTools(tools)
+	}
+	if funcs, ok := parsed["functions"]; ok {
+		if _, hasTools := parsed["tools"]; !hasTools {
+			parsed["tools"] = convertLegacyFunctions(funcs)
+		}
+		delete(parsed, "functions")
+	}
+
+	// Chat Completions tool_choice/function_call -> Responses tool_choice.
+	if toolChoice, ok := parsed["tool_choice"]; ok {
+		parsed["tool_choice"] = convertChatToolChoice(toolChoice)
+	}
+	if functionCall, ok := parsed["function_call"]; ok {
+		if _, hasToolChoice := parsed["tool_choice"]; !hasToolChoice {
+			parsed["tool_choice"] = convertLegacyFunctionCall(functionCall)
+		}
+		delete(parsed, "function_call")
+	}
+
 	// Common compatibility mapping.
 	if maxTokens, ok := parsed["max_tokens"]; ok {
 		if _, exists := parsed["max_output_tokens"]; !exists {
@@ -47,6 +69,172 @@ func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]b
 		return nil, "", false, err
 	}
 	return converted, model, stream, nil
+}
+
+func convertChatTools(rawTools any) []any {
+	tools, _ := rawTools.([]any)
+	if len(tools) == 0 {
+		return nil
+	}
+
+	out := make([]any, 0, len(tools))
+	for _, item := range tools {
+		tool, _ := item.(map[string]any)
+		if tool == nil {
+			continue
+		}
+
+		toolType, _ := tool["type"].(string)
+		if strings.TrimSpace(toolType) == "" {
+			toolType = "function"
+		}
+
+		if toolType != "function" {
+			out = append(out, tool)
+			continue
+		}
+
+		fn, _ := tool["function"].(map[string]any)
+		name := ""
+		if fn != nil {
+			name, _ = fn["name"].(string)
+		}
+		if strings.TrimSpace(name) == "" {
+			name, _ = tool["name"].(string)
+		}
+		if strings.TrimSpace(name) == "" {
+			// Skip invalid entries to avoid upstream 400 on missing tools[].name.
+			continue
+		}
+
+		converted := map[string]any{
+			"type": "function",
+			"name": name,
+		}
+
+		if fn != nil {
+			if desc, _ := fn["description"].(string); strings.TrimSpace(desc) != "" {
+				converted["description"] = desc
+			}
+			if params, ok := fn["parameters"]; ok {
+				converted["parameters"] = params
+			}
+			if strict, ok := fn["strict"].(bool); ok {
+				converted["strict"] = strict
+			}
+		}
+
+		if _, ok := converted["description"]; !ok {
+			if desc, _ := tool["description"].(string); strings.TrimSpace(desc) != "" {
+				converted["description"] = desc
+			}
+		}
+		if _, ok := converted["parameters"]; !ok {
+			if params, ok := tool["parameters"]; ok {
+				converted["parameters"] = params
+			}
+		}
+		if _, ok := converted["strict"]; !ok {
+			if strict, ok := tool["strict"].(bool); ok {
+				converted["strict"] = strict
+			}
+		}
+
+		out = append(out, converted)
+	}
+	return out
+}
+
+func convertLegacyFunctions(rawFunctions any) []any {
+	functions, _ := rawFunctions.([]any)
+	if len(functions) == 0 {
+		return nil
+	}
+
+	out := make([]any, 0, len(functions))
+	for _, item := range functions {
+		fn, _ := item.(map[string]any)
+		if fn == nil {
+			continue
+		}
+		name, _ := fn["name"].(string)
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+
+		tool := map[string]any{
+			"type": "function",
+			"name": name,
+		}
+		if desc, _ := fn["description"].(string); strings.TrimSpace(desc) != "" {
+			tool["description"] = desc
+		}
+		if params, ok := fn["parameters"]; ok {
+			tool["parameters"] = params
+		}
+		if strict, ok := fn["strict"].(bool); ok {
+			tool["strict"] = strict
+		}
+		out = append(out, tool)
+	}
+	return out
+}
+
+func convertChatToolChoice(raw any) any {
+	switch v := raw.(type) {
+	case string:
+		return v
+	case map[string]any:
+		toolType, _ := v["type"].(string)
+		if strings.TrimSpace(toolType) == "" {
+			toolType = "function"
+		}
+		if toolType != "function" {
+			return v
+		}
+
+		name := ""
+		if fn, _ := v["function"].(map[string]any); fn != nil {
+			name, _ = fn["name"].(string)
+		}
+		if strings.TrimSpace(name) == "" {
+			name, _ = v["name"].(string)
+		}
+		if strings.TrimSpace(name) == "" {
+			return "auto"
+		}
+		return map[string]any{
+			"type": "function",
+			"name": name,
+		}
+	default:
+		return raw
+	}
+}
+
+func convertLegacyFunctionCall(raw any) any {
+	switch v := raw.(type) {
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "auto":
+			return "auto"
+		case "none":
+			return "none"
+		default:
+			return "auto"
+		}
+	case map[string]any:
+		name, _ := v["name"].(string)
+		if strings.TrimSpace(name) == "" {
+			return "auto"
+		}
+		return map[string]any{
+			"type": "function",
+			"name": name,
+		}
+	default:
+		return "auto"
+	}
 }
 
 func convertChatMessagesToResponsesInput(rawMessages any) []any {
