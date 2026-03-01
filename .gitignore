@@ -1,0 +1,12 @@
+# Build/output artifacts
+output/
+*.exe
+
+# Local runtime/config secrets
+config.json
+config.local*.json
+token_state.json
+token*.json
+
+# Keep example config tracked
+!config.example.json

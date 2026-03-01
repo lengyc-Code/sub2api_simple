@@ -1,0 +1,19 @@
+[Unit]
+Description=sub2api_simple Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sub2api
+Group=sub2api
+WorkingDirectory=/opt/sub2api-standalone
+ExecStart=/opt/sub2api-standalone/sub2api-standalone -config /etc/sub2api-standalone/config.json
+Restart=always
+RestartSec=5s
+LimitNOFILE=100000
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

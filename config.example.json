@@ -1,0 +1,87 @@
+{
+  "listen_addr": ":8080",
+  "auth_tokens": [
+    "sk-your-api-key-for-clients"
+  ],
+  "accounts": [
+    {
+      "name": "claude-oauth-primary",
+      "platform": "anthropic",
+      "type": "oauth",
+      "oauth_token": "your-claude-oauth-token-here",
+      "concurrency": 3,
+      "priority": 10
+    },
+    {
+      "name": "claude-apikey-fallback",
+      "platform": "anthropic",
+      "type": "api_key",
+      "api_key": "sk-ant-your-anthropic-api-key",
+      "concurrency": 5,
+      "priority": 50
+    },
+    {
+      "name": "openai-oauth-browser",
+      "platform": "openai",
+      "type": "oauth",
+      "concurrency": 3,
+      "priority": 5,
+      "_comment": "Browser login: visit /auth/login?account=openai-oauth-browser to authorize via OpenAI. No refresh_token needed in config."
+    },
+    {
+      "name": "openai-oauth-refresh",
+      "platform": "openai",
+      "type": "oauth",
+      "refresh_token": "your-openai-refresh-token-here",
+      "concurrency": 3,
+      "priority": 10,
+      "_comment": "Refresh token mode: auto-exchanges for access_token. chatgpt_account_id extracted from id_token."
+    },
+    {
+      "name": "openai-oauth-legacy",
+      "platform": "openai",
+      "type": "oauth",
+      "oauth_token": "your-openai-access-token-here",
+      "chatgpt_account_id": "your-chatgpt-account-id",
+      "concurrency": 3,
+      "priority": 20,
+      "_comment": "Legacy: direct access_token, no auto-refresh"
+    },
+    {
+      "name": "openai-apikey-fallback",
+      "platform": "openai",
+      "type": "api_key",
+      "api_key": "sk-your-openai-api-key",
+      "concurrency": 5,
+      "priority": 50
+    }
+  ],
+  "openai_default_instructions": {
+    "gpt-5.3-codex": "You are a senior software engineer. Answer concisely and provide runnable code when possible.",
+    "gpt-5.1-codex-mini": "You are an efficient coding assistant. Keep outputs short and practical.",
+    "*": "You are a helpful assistant."
+  },
+  "model_extra_params": {
+    "gpt-5.2": {
+      "reasoning": {
+        "effort": "high"
+      },
+      "temperature": 0.2
+    },
+    "gpt-5.1-codex-mini": {
+      "reasoning": {
+        "effort": "medium"
+      }
+    },
+    "*": {
+      "metadata": {
+        "source": "sub2api"
+      }
+    }
+  },
+  "enable_request_log": true,
+  "enable_stream_debug_log": false,
+  "max_account_switches": 5,
+  "sticky_session_ttl": "1h",
+  "stream_read_timeout": "5m"
+}
