@@ -78,6 +78,7 @@ func PrepareBody(body []byte, opts PrepareOptions) []byte {
 			"temperature", "top_p",
 			"frequency_penalty", "presence_penalty",
 			"metadata",
+			"prompt_cache_retention",
 		} {
 			if _, ok := parsed[key]; ok {
 				delete(parsed, key)
