@@ -337,6 +337,7 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 	created := time.Now().Unix()
 	roleSent := false
 	finished := false
+	toolCallAccumulator := newChatCompletionToolCallAccumulator()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -393,16 +394,68 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 		flusher.Flush()
 	}
 
+	emitToolCalls := func(toolCalls []map[string]string) bool {
+		if len(toolCalls) == 0 {
+			return false
+		}
+
+		if !roleSent {
+			if err := g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
+				chatID, chatModel, created, map[string]any{"role": "assistant"}, nil),
+				account, model,
+			); err != nil {
+				return false
+			}
+			flusher.Flush()
+			roleSent = true
+		}
+
+		for i, tc := range toolCalls {
+			delta := map[string]any{
+				"tool_calls": []any{
+					map[string]any{
+						"index": i,
+						"id":    tc["id"],
+						"type":  "function",
+						"function": map[string]any{
+							"name":      tc["name"],
+							"arguments": tc["arguments"],
+						},
+					},
+				},
+			}
+			if err := g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
+				chatID, chatModel, created, delta, nil),
+				account, model,
+			); err != nil {
+				return false
+			}
+			flusher.Flush()
+		}
+		return true
+	}
+
+	finishWithPendingToolCalls := func(defaultReason string) {
+		if finished {
+			return
+		}
+		if emitToolCalls(toolCallAccumulator.ToolCalls()) {
+			emitFinish("tool_calls")
+			return
+		}
+		emitFinish(defaultReason)
+	}
+
 	for {
 		select {
 		case ev, ok := <-events:
 			if !ok {
-				emitFinish("stop")
+				finishWithPendingToolCalls("stop")
 				return
 			}
 			if ev.err != nil {
 				log.Printf("[openai-chat] stream read error for %q: %v", account.Config.Name, ev.err)
-				emitFinish("stop")
+				finishWithPendingToolCalls("stop")
 				return
 			}
 
@@ -426,7 +479,7 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 				continue
 			}
 			if data == "[DONE]" {
-				emitFinish("stop")
+				finishWithPendingToolCalls("stop")
 				return
 			}
 
@@ -469,36 +522,25 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 					return
 				}
 				flusher.Flush()
+			case "response.output_item.added",
+				"response.output_item.done",
+				"response.function_call_arguments.delta",
+				"response.function_call_arguments.done":
+				toolCallAccumulator.Consume(evtType, evt)
 			case "response.completed":
 				respObj, _ := evt["response"].(map[string]any)
 				if respObj == nil {
-					emitFinish("stop")
+					finishWithPendingToolCalls("stop")
 					return
 				}
 				chatResp := openaihandler.ChatCompletionFromResponses(respObj, chatModel)
 				toolCalls := extractToolCallsFromChatCompletion(chatResp)
+				if len(toolCalls) == 0 {
+					toolCalls = toolCallAccumulator.ToolCalls()
+				}
 				if len(toolCalls) > 0 {
-					for i, tc := range toolCalls {
-						delta := map[string]any{
-							"tool_calls": []any{
-								map[string]any{
-									"index": i,
-									"id":    tc["id"],
-									"type":  "function",
-									"function": map[string]any{
-										"name":      tc["name"],
-										"arguments": tc["arguments"],
-									},
-								},
-							},
-						}
-						if err := g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
-							chatID, chatModel, created, delta, nil),
-							account, model,
-						); err != nil {
-							return
-						}
-						flusher.Flush()
+					if !emitToolCalls(toolCalls) {
+						return
 					}
 					emitFinish("tool_calls")
 					return
@@ -506,15 +548,16 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 				emitFinish("stop")
 				return
 			case "response.output_text.done":
-				emitFinish("stop")
-				return
+				// output_text.done only means the current text block ended.
+				// Tool calls may still arrive in subsequent events (e.g. response.completed).
+				continue
 			case "error":
-				emitFinish("stop")
+				finishWithPendingToolCalls("stop")
 				return
 			}
 		case <-timer.C:
 			log.Printf("[openai-chat] upstream data timeout for %q", account.Config.Name)
-			emitFinish("stop")
+			finishWithPendingToolCalls("stop")
 			return
 		}
 	}
@@ -529,6 +572,182 @@ func (g *Gateway) writeChatCompletionSSEChunk(w http.ResponseWriter, chunk map[s
 	}
 	_, err = fmt.Fprintf(w, "data: %s\n\n", b)
 	return err
+}
+
+type chatCompletionToolCall struct {
+	id        string
+	name      string
+	arguments string
+}
+
+type chatCompletionToolCallAccumulator struct {
+	calls         []chatCompletionToolCall
+	byID          map[string]int
+	byOutputIndex map[int]int
+}
+
+func newChatCompletionToolCallAccumulator() *chatCompletionToolCallAccumulator {
+	return &chatCompletionToolCallAccumulator{
+		calls:         make([]chatCompletionToolCall, 0),
+		byID:          make(map[string]int),
+		byOutputIndex: make(map[int]int),
+	}
+}
+
+func (a *chatCompletionToolCallAccumulator) Consume(evtType string, evt map[string]any) {
+	if a == nil || evt == nil {
+		return
+	}
+	switch evtType {
+	case "response.output_item.added", "response.output_item.done":
+		a.consumeOutputItem(evt)
+	case "response.function_call_arguments.delta":
+		a.consumeFunctionCallArgumentsDelta(evt)
+	case "response.function_call_arguments.done":
+		a.consumeFunctionCallArgumentsDone(evt)
+	}
+}
+
+func (a *chatCompletionToolCallAccumulator) ToolCalls() []map[string]string {
+	if a == nil || len(a.calls) == 0 {
+		return nil
+	}
+
+	out := make([]map[string]string, 0, len(a.calls))
+	for i, call := range a.calls {
+		if strings.TrimSpace(call.name) == "" {
+			continue
+		}
+
+		callID := strings.TrimSpace(call.id)
+		if callID == "" {
+			callID = fmt.Sprintf("call_%d", i)
+		}
+
+		out = append(out, map[string]string{
+			"id":        callID,
+			"name":      call.name,
+			"arguments": call.arguments,
+		})
+	}
+	return out
+}
+
+func (a *chatCompletionToolCallAccumulator) consumeOutputItem(evt map[string]any) {
+	item, _ := evt["item"].(map[string]any)
+	if item == nil {
+		return
+	}
+
+	itemType, _ := item["type"].(string)
+	if itemType != "function_call" && itemType != "tool_call" {
+		return
+	}
+
+	callID := firstNonEmptyString(item["call_id"], item["id"])
+	outputIndex := intFromAnyOrDefault(evt["output_index"], -1)
+	idx := a.ensureCall(callID, outputIndex)
+
+	if name, _ := item["name"].(string); strings.TrimSpace(name) != "" {
+		a.calls[idx].name = name
+	}
+	if args, _ := item["arguments"].(string); args != "" {
+		a.calls[idx].arguments = args
+	}
+}
+
+func (a *chatCompletionToolCallAccumulator) consumeFunctionCallArgumentsDelta(evt map[string]any) {
+	callID := firstNonEmptyString(evt["call_id"], evt["item_id"], evt["id"])
+	outputIndex := intFromAnyOrDefault(evt["output_index"], -1)
+	idx := a.ensureCall(callID, outputIndex)
+
+	if name, _ := evt["name"].(string); strings.TrimSpace(name) != "" {
+		a.calls[idx].name = name
+	}
+	if delta, _ := evt["delta"].(string); delta != "" {
+		a.calls[idx].arguments += delta
+	}
+}
+
+func (a *chatCompletionToolCallAccumulator) consumeFunctionCallArgumentsDone(evt map[string]any) {
+	callID := firstNonEmptyString(evt["call_id"], evt["item_id"], evt["id"])
+	outputIndex := intFromAnyOrDefault(evt["output_index"], -1)
+	idx := a.ensureCall(callID, outputIndex)
+
+	if name, _ := evt["name"].(string); strings.TrimSpace(name) != "" {
+		a.calls[idx].name = name
+	}
+	if args, _ := evt["arguments"].(string); args != "" {
+		a.calls[idx].arguments = args
+	}
+}
+
+func (a *chatCompletionToolCallAccumulator) ensureCall(callID string, outputIndex int) int {
+	callID = strings.TrimSpace(callID)
+	if callID != "" {
+		if idx, ok := a.byID[callID]; ok {
+			if outputIndex >= 0 {
+				a.byOutputIndex[outputIndex] = idx
+			}
+			return idx
+		}
+	}
+	if outputIndex >= 0 {
+		if idx, ok := a.byOutputIndex[outputIndex]; ok {
+			if callID != "" {
+				a.byID[callID] = idx
+				if strings.TrimSpace(a.calls[idx].id) == "" {
+					a.calls[idx].id = callID
+				}
+			}
+			return idx
+		}
+	}
+
+	if callID == "" {
+		if outputIndex >= 0 {
+			callID = fmt.Sprintf("call_%d", outputIndex)
+		} else {
+			callID = fmt.Sprintf("call_%d", len(a.calls))
+		}
+	}
+
+	idx := len(a.calls)
+	a.calls = append(a.calls, chatCompletionToolCall{id: callID})
+	a.byID[callID] = idx
+	if outputIndex >= 0 {
+		a.byOutputIndex[outputIndex] = idx
+	}
+	return idx
+}
+
+func firstNonEmptyString(values ...any) string {
+	for _, v := range values {
+		s, _ := v.(string)
+		if strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func intFromAnyOrDefault(v any, defaultValue int) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case json.Number:
+		x, err := n.Int64()
+		if err == nil {
+			return int(x)
+		}
+	}
+	return defaultValue
 }
 
 func extractToolCallsFromChatCompletion(chatResp map[string]any) []map[string]string {
