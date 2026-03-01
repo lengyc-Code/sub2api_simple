@@ -228,6 +228,7 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsStreamingResponse(
 	}
 
 	content := ""
+	toolCalls := extractToolCallsFromChatCompletion(chatResp)
 	if choices, ok := chatResp["choices"].([]any); ok && len(choices) > 0 {
 		if choice, ok := choices[0].(map[string]any); ok {
 			if message, ok := choice["message"].(map[string]any); ok {
@@ -261,8 +262,34 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsStreamingResponse(
 		flusher.Flush()
 	}
 
+	finishReason := "stop"
+	if len(toolCalls) > 0 {
+		for i, tc := range toolCalls {
+			delta := map[string]any{
+				"tool_calls": []any{
+					map[string]any{
+						"index": i,
+						"id":    tc["id"],
+						"type":  "function",
+						"function": map[string]any{
+							"name":      tc["name"],
+							"arguments": tc["arguments"],
+						},
+					},
+				},
+			}
+			if err := writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
+				chatID, chatModel, created, delta, nil),
+			); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+		finishReason = "tool_calls"
+	}
+
 	_ = writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
-		chatID, chatModel, created, map[string]any{}, "stop"),
+		chatID, chatModel, created, map[string]any{}, finishReason),
 	)
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
@@ -330,13 +357,16 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 	timer := time.NewTimer(streamTimeout)
 	defer timer.Stop()
 
-	emitFinish := func() {
+	emitFinish := func(reason string) {
 		if finished {
 			return
 		}
+		if reason == "" {
+			reason = "stop"
+		}
 		finished = true
 		_ = writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
-			chatID, chatModel, created, map[string]any{}, "stop"),
+			chatID, chatModel, created, map[string]any{}, reason),
 		)
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
@@ -346,12 +376,12 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 		select {
 		case ev, ok := <-events:
 			if !ok {
-				emitFinish()
+				emitFinish("stop")
 				return
 			}
 			if ev.err != nil {
 				log.Printf("[openai-chat] stream read error for %q: %v", account.Config.Name, ev.err)
-				emitFinish()
+				emitFinish("stop")
 				return
 			}
 
@@ -372,7 +402,7 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 				continue
 			}
 			if data == "[DONE]" {
-				emitFinish()
+				emitFinish("stop")
 				return
 			}
 
@@ -413,16 +443,51 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 					return
 				}
 				flusher.Flush()
-			case "response.output_text.done", "response.completed":
-				emitFinish()
+			case "response.completed":
+				respObj, _ := evt["response"].(map[string]any)
+				if respObj == nil {
+					emitFinish("stop")
+					return
+				}
+				chatResp := openaihandler.ChatCompletionFromResponses(respObj, chatModel)
+				toolCalls := extractToolCallsFromChatCompletion(chatResp)
+				if len(toolCalls) > 0 {
+					for i, tc := range toolCalls {
+						delta := map[string]any{
+							"tool_calls": []any{
+								map[string]any{
+									"index": i,
+									"id":    tc["id"],
+									"type":  "function",
+									"function": map[string]any{
+										"name":      tc["name"],
+										"arguments": tc["arguments"],
+									},
+								},
+							},
+						}
+						if err := writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
+							chatID, chatModel, created, delta, nil),
+						); err != nil {
+							return
+						}
+						flusher.Flush()
+					}
+					emitFinish("tool_calls")
+					return
+				}
+				emitFinish("stop")
+				return
+			case "response.output_text.done":
+				emitFinish("stop")
 				return
 			case "error":
-				emitFinish()
+				emitFinish("stop")
 				return
 			}
 		case <-timer.C:
 			log.Printf("[openai-chat] upstream data timeout for %q", account.Config.Name)
-			emitFinish()
+			emitFinish("stop")
 			return
 		}
 	}
@@ -435,4 +500,48 @@ func writeChatCompletionSSEChunk(w http.ResponseWriter, chunk map[string]any) er
 	}
 	_, err = fmt.Fprintf(w, "data: %s\n\n", b)
 	return err
+}
+
+func extractToolCallsFromChatCompletion(chatResp map[string]any) []map[string]string {
+	choices, _ := chatResp["choices"].([]any)
+	if len(choices) == 0 {
+		return nil
+	}
+	choice, _ := choices[0].(map[string]any)
+	if choice == nil {
+		return nil
+	}
+	message, _ := choice["message"].(map[string]any)
+	if message == nil {
+		return nil
+	}
+	rawToolCalls, _ := message["tool_calls"].([]any)
+	if len(rawToolCalls) == 0 {
+		return nil
+	}
+
+	out := make([]map[string]string, 0, len(rawToolCalls))
+	for _, item := range rawToolCalls {
+		tc, _ := item.(map[string]any)
+		if tc == nil {
+			continue
+		}
+		id, _ := tc["id"].(string)
+		fn, _ := tc["function"].(map[string]any)
+		name := ""
+		args := ""
+		if fn != nil {
+			name, _ = fn["name"].(string)
+			args, _ = fn["arguments"].(string)
+		}
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		out = append(out, map[string]string{
+			"id":        id,
+			"name":      name,
+			"arguments": args,
+		})
+	}
+	return out
 }

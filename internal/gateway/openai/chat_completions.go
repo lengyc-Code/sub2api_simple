@@ -261,14 +261,62 @@ func convertChatMessagesToResponsesInput(rawMessages any) []any {
 		if name, _ := msg["name"].(string); strings.TrimSpace(name) != "" {
 			out["name"] = name
 		}
+		if toolCallID, _ := msg["tool_call_id"].(string); strings.TrimSpace(toolCallID) != "" {
+			out["tool_call_id"] = toolCallID
+			out["call_id"] = toolCallID
+		}
 
 		if content := convertMessageContent(role, msg["content"]); len(content) > 0 {
 			out["content"] = content
+		}
+		if role == "assistant" {
+			if toolCalls := convertAssistantToolCalls(msg["tool_calls"]); len(toolCalls) > 0 {
+				if existing, _ := out["content"].([]any); len(existing) > 0 {
+					out["content"] = append(existing, toolCalls...)
+				} else {
+					out["content"] = toolCalls
+				}
+			}
 		}
 
 		result = append(result, out)
 	}
 	return result
+}
+
+func convertAssistantToolCalls(raw any) []any {
+	toolCalls, _ := raw.([]any)
+	if len(toolCalls) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(toolCalls))
+	for _, item := range toolCalls {
+		tc, _ := item.(map[string]any)
+		if tc == nil {
+			continue
+		}
+		if t, _ := tc["type"].(string); strings.TrimSpace(t) != "" && t != "function" {
+			continue
+		}
+		fn, _ := tc["function"].(map[string]any)
+		name := ""
+		args := ""
+		if fn != nil {
+			name, _ = fn["name"].(string)
+			args, _ = fn["arguments"].(string)
+		}
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		callID, _ := tc["id"].(string)
+		out = append(out, map[string]any{
+			"type":      "function_call",
+			"name":      name,
+			"arguments": args,
+			"call_id":   callID,
+		})
+	}
+	return out
 }
 
 func convertMessageContent(role string, raw any) []any {
@@ -390,6 +438,18 @@ func ChatCompletionFromResponses(resp map[string]any, fallbackModel string) map[
 	}
 
 	content := ExtractResponseText(resp)
+	toolCalls := ExtractToolCallsFromResponses(resp)
+	finishReason := "stop"
+	message := map[string]any{
+		"role": "assistant",
+	}
+	if len(toolCalls) > 0 {
+		message["tool_calls"] = toolCalls
+		message["content"] = nil
+		finishReason = "tool_calls"
+	} else {
+		message["content"] = content
+	}
 
 	out := map[string]any{
 		"id":      id,
@@ -398,12 +458,9 @@ func ChatCompletionFromResponses(resp map[string]any, fallbackModel string) map[
 		"model":   model,
 		"choices": []any{
 			map[string]any{
-				"index": 0,
-				"message": map[string]any{
-					"role":    "assistant",
-					"content": content,
-				},
-				"finish_reason": "stop",
+				"index":         0,
+				"message":       message,
+				"finish_reason": finishReason,
 			},
 		},
 	}
@@ -413,6 +470,69 @@ func ChatCompletionFromResponses(resp map[string]any, fallbackModel string) map[
 	}
 
 	return out
+}
+
+func ExtractToolCallsFromResponses(resp map[string]any) []any {
+	output, _ := resp["output"].([]any)
+	if len(output) == 0 {
+		return nil
+	}
+
+	toolCalls := make([]any, 0)
+	for _, item := range output {
+		itemMap, _ := item.(map[string]any)
+		if itemMap == nil {
+			continue
+		}
+
+		itemType, _ := itemMap["type"].(string)
+		if itemType == "function_call" {
+			if tc, ok := toolCallFromFunctionCall(itemMap); ok {
+				toolCalls = append(toolCalls, tc)
+			}
+			continue
+		}
+
+		content, _ := itemMap["content"].([]any)
+		for _, part := range content {
+			partMap, _ := part.(map[string]any)
+			if partMap == nil {
+				continue
+			}
+			partType, _ := partMap["type"].(string)
+			if partType != "function_call" && partType != "tool_call" {
+				continue
+			}
+			if tc, ok := toolCallFromFunctionCall(partMap); ok {
+				toolCalls = append(toolCalls, tc)
+			}
+		}
+	}
+	return toolCalls
+}
+
+func toolCallFromFunctionCall(raw map[string]any) (map[string]any, bool) {
+	name, _ := raw["name"].(string)
+	if strings.TrimSpace(name) == "" {
+		return nil, false
+	}
+	args, _ := raw["arguments"].(string)
+	callID, _ := raw["call_id"].(string)
+	if strings.TrimSpace(callID) == "" {
+		callID, _ = raw["id"].(string)
+	}
+	if strings.TrimSpace(callID) == "" {
+		callID = fmt.Sprintf("call_%d", time.Now().UnixNano())
+	}
+
+	return map[string]any{
+		"id":   callID,
+		"type": "function",
+		"function": map[string]any{
+			"name":      name,
+			"arguments": args,
+		},
+	}, true
 }
 
 func ChatCompletionChunk(id, model string, created int64, delta map[string]any, finishReason any) map[string]any {
