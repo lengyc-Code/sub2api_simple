@@ -91,6 +91,15 @@ ensure_prerequisites() {
   command -v systemctl >/dev/null 2>&1 || fail "systemctl not found. This script requires systemd."
 }
 
+stop_service_if_running() {
+  if systemctl is-active --quiet "${SERVICE_NAME}"; then
+    print_step "Service ${SERVICE_NAME} is running, stopping it before reinstall..."
+    systemctl stop "${SERVICE_NAME}"
+  else
+    print_step "Service ${SERVICE_NAME} is not running."
+  fi
+}
+
 build_from_source_if_needed() {
   if [[ -n "${BIN_PATH}" && -n "${SOURCE_PATH}" ]]; then
     fail "--binary and --source cannot be used together."
@@ -220,6 +229,7 @@ main() {
   require_root
   parse_args "$@"
   ensure_prerequisites
+  stop_service_if_running
   build_from_source_if_needed
   create_service_user
   install_binary

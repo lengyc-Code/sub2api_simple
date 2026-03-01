@@ -26,7 +26,7 @@ func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]b
 	// Chat Completions uses "messages"; Responses uses "input".
 	if _, ok := parsed["input"]; !ok {
 		if messages, ok := parsed["messages"]; ok {
-			parsed["input"] = messages
+			parsed["input"] = convertChatMessagesToResponsesInput(messages)
 		}
 	}
 	delete(parsed, "messages")
@@ -47,6 +47,137 @@ func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]b
 		return nil, "", false, err
 	}
 	return converted, model, stream, nil
+}
+
+func convertChatMessagesToResponsesInput(rawMessages any) []any {
+	messages, _ := rawMessages.([]any)
+	if len(messages) == 0 {
+		return nil
+	}
+
+	result := make([]any, 0, len(messages))
+	for _, item := range messages {
+		msg, _ := item.(map[string]any)
+		if msg == nil {
+			continue
+		}
+
+		role, _ := msg["role"].(string)
+		if strings.TrimSpace(role) == "" {
+			role = "user"
+		}
+
+		out := map[string]any{
+			"role": role,
+		}
+		if name, _ := msg["name"].(string); strings.TrimSpace(name) != "" {
+			out["name"] = name
+		}
+
+		if content := convertMessageContent(role, msg["content"]); len(content) > 0 {
+			out["content"] = content
+		}
+
+		result = append(result, out)
+	}
+	return result
+}
+
+func convertMessageContent(role string, raw any) []any {
+	switch v := raw.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return []any{
+			map[string]any{
+				"type": roleTextPartType(role),
+				"text": v,
+			},
+		}
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, p := range v {
+			part, _ := p.(map[string]any)
+			if part == nil {
+				continue
+			}
+			converted, ok := convertMessagePart(role, part)
+			if !ok {
+				continue
+			}
+			out = append(out, converted)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func convertMessagePart(role string, part map[string]any) (map[string]any, bool) {
+	partType, _ := part["type"].(string)
+	partType = strings.TrimSpace(partType)
+
+	switch partType {
+	case "", "text":
+		text, _ := part["text"].(string)
+		if strings.TrimSpace(text) == "" {
+			return nil, false
+		}
+		return map[string]any{
+			"type": roleTextPartType(role),
+			"text": text,
+		}, true
+	case "input_text", "output_text", "summary_text", "refusal":
+		// Already in Responses-compatible shape.
+		return part, true
+	case "image_url":
+		if imageURL, ok := extractImageURL(part["image_url"]); ok {
+			return map[string]any{
+				"type":      "input_image",
+				"image_url": imageURL,
+			}, true
+		}
+		return nil, false
+	case "input_image", "input_file", "computer_screenshot":
+		return part, true
+	default:
+		// Best effort fallback for unknown text-like part.
+		if text, _ := part["text"].(string); strings.TrimSpace(text) != "" {
+			return map[string]any{
+				"type": roleTextPartType(role),
+				"text": text,
+			}, true
+		}
+		return nil, false
+	}
+}
+
+func roleTextPartType(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "assistant":
+		return "output_text"
+	default:
+		return "input_text"
+	}
+}
+
+func extractImageURL(raw any) (string, bool) {
+	switch v := raw.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return "", false
+		}
+		return v, true
+	case map[string]any:
+		url, _ := v["url"].(string)
+		if strings.TrimSpace(url) == "" {
+			return "", false
+		}
+		return url, true
+	default:
+		return "", false
+	}
 }
 
 func ChatCompletionFromResponses(resp map[string]any, fallbackModel string) map[string]any {

@@ -1,8 +1,7 @@
-// Sub2API Standalone 测试客户端
+// Sub2API Standalone ?//
+// go test -v -run TestClient -timeout 120s
 //
-// 用法：go test -v -run TestClient -timeout 120s
-//
-// 需要先启动 sub2api-standalone 服务端：
+//  sub2api-standalone
 //
 //	go run . -config config.json
 package main
@@ -45,7 +44,7 @@ func getAuthToken(t *testing.T) string {
 	return cfg.AuthTokens[0]
 }
 
-// ── Health Check ──
+//  Health Check
 
 func TestHealthCheck(t *testing.T) {
 	resp, err := http.Get(testBaseURL + "/health")
@@ -63,7 +62,7 @@ func TestHealthCheck(t *testing.T) {
 	prettyPrint(t, "Health", result)
 }
 
-// ── Models ──
+//  Models
 
 func TestModels(t *testing.T) {
 	req, _ := http.NewRequest("GET", testBaseURL+"/v1/models", nil)
@@ -85,7 +84,7 @@ func TestModels(t *testing.T) {
 	prettyPrint(t, "Models", result)
 }
 
-// ── Claude Messages API (streaming) ──
+//  Claude Messages API (streaming)
 
 func TestClaudeMessagesStream(t *testing.T) {
 	payload := map[string]any{
@@ -102,7 +101,7 @@ func TestClaudeMessagesStream(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+getAuthToken(t))
 	req.Header.Set("Content-Type", "application/json")
 
-	t.Logf("→ POST /v1/messages (stream=true, model=%s)", payload["model"])
+	t.Logf("?POST /v1/messages (stream=true, model=%s)", payload["model"])
 
 	client := &http.Client{Timeout: 2 * time.Minute}
 	resp, err := client.Do(req)
@@ -111,7 +110,7 @@ func TestClaudeMessagesStream(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	t.Logf("← Status: %d, Content-Type: %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	t.Logf("?Status: %d, Content-Type: %s", resp.StatusCode, resp.Header.Get("Content-Type"))
 
 	if resp.StatusCode == 401 || resp.StatusCode == 503 {
 		body, _ := io.ReadAll(resp.Body)
@@ -125,7 +124,7 @@ func TestClaudeMessagesStream(t *testing.T) {
 	readSSEStream(t, resp.Body, "Claude")
 }
 
-// ── Claude Messages API (non-streaming) ──
+//  Claude Messages API (non-streaming)
 
 func TestClaudeMessagesNonStream(t *testing.T) {
 	payload := map[string]any{
@@ -142,7 +141,7 @@ func TestClaudeMessagesNonStream(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+getAuthToken(t))
 	req.Header.Set("Content-Type", "application/json")
 
-	t.Logf("→ POST /v1/messages (stream=false, model=%s)", payload["model"])
+	t.Logf("?POST /v1/messages (stream=false, model=%s)", payload["model"])
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
@@ -152,7 +151,7 @@ func TestClaudeMessagesNonStream(t *testing.T) {
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	t.Logf("← Status: %d", resp.StatusCode)
+	t.Logf("?Status: %d", resp.StatusCode)
 
 	if resp.StatusCode == 401 || resp.StatusCode == 503 {
 		t.Skipf("Upstream returned %d (check refresh_token/oauth_token/api_key in config.json): %s", resp.StatusCode, respBody)
@@ -166,7 +165,7 @@ func TestClaudeMessagesNonStream(t *testing.T) {
 	prettyPrint(t, "Claude Response", result)
 }
 
-// ── OpenAI Responses API (streaming) ──
+//  OpenAI Responses API (streaming)
 
 func TestOpenAIResponsesStream(t *testing.T) {
 	payload := map[string]any{
@@ -183,7 +182,7 @@ func TestOpenAIResponsesStream(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+getAuthToken(t))
 	req.Header.Set("Content-Type", "application/json")
 
-	t.Logf("→ POST /v1/responses (stream=true, model=%s)", payload["model"])
+	t.Logf("?POST /v1/responses (stream=true, model=%s)", payload["model"])
 
 	client := &http.Client{Timeout: 2 * time.Minute}
 	resp, err := client.Do(req)
@@ -192,7 +191,7 @@ func TestOpenAIResponsesStream(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	t.Logf("← Status: %d, Content-Type: %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	t.Logf("?Status: %d, Content-Type: %s", resp.StatusCode, resp.Header.Get("Content-Type"))
 
 	if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 503 {
 		body, _ := io.ReadAll(resp.Body)
@@ -206,7 +205,7 @@ func TestOpenAIResponsesStream(t *testing.T) {
 	readSSEStream(t, resp.Body, "OpenAI")
 }
 
-// ── OpenAI Responses API (non-streaming via API Key) ──
+//  OpenAI Responses API (non-streaming via API Key)
 
 func TestOpenAIResponsesNonStream(t *testing.T) {
 	payload := map[string]any{
@@ -223,7 +222,7 @@ func TestOpenAIResponsesNonStream(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+getAuthToken(t))
 	req.Header.Set("Content-Type", "application/json")
 
-	t.Logf("→ POST /v1/responses (stream=false, model=%s)", payload["model"])
+	t.Logf("?POST /v1/responses (stream=false, model=%s)", payload["model"])
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
@@ -233,7 +232,7 @@ func TestOpenAIResponsesNonStream(t *testing.T) {
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	t.Logf("← Status: %d", resp.StatusCode)
+	t.Logf("?Status: %d", resp.StatusCode)
 
 	if resp.StatusCode == 401 || resp.StatusCode == 503 {
 		t.Skipf("Upstream returned %d (check refresh_token/oauth_token/api_key in config.json): %s", resp.StatusCode, respBody)
@@ -247,7 +246,86 @@ func TestOpenAIResponsesNonStream(t *testing.T) {
 	prettyPrint(t, "OpenAI Response", result)
 }
 
-// ── Auth Rejection ──
+//  Auth Rejection
+
+// OpenAI Chat Completions API (streaming)
+func TestOpenAIChatCompletionsStream(t *testing.T) {
+	payload := map[string]any{
+		"model":  "gpt-5.1-codex-mini",
+		"stream": true,
+		"messages": []map[string]any{
+			{"role": "system", "content": "You are a concise assistant."},
+			{"role": "user", "content": "Say hello in 3 different languages, keep it brief."},
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", testBaseURL+"/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+getAuthToken(t))
+	req.Header.Set("Content-Type", "application/json")
+
+	t.Logf("POST /v1/chat/completions (stream=true, model=%s)", payload["model"])
+
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	t.Logf("Status: %d, Content-Type: %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+
+	if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 503 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Skipf("Upstream returned %d (check refresh_token/oauth_token in config.json): %s", resp.StatusCode, body)
+	}
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	readSSEStream(t, resp.Body, "OpenAIChat")
+}
+
+// OpenAI Chat Completions API (non-streaming)
+func TestOpenAIChatCompletionsNonStream(t *testing.T) {
+	payload := map[string]any{
+		"model":  "gpt-5.1-codex-mini",
+		"stream": false,
+		"messages": []map[string]any{
+			{"role": "system", "content": "You are a concise assistant."},
+			{"role": "user", "content": "What is 2+2? Answer in one word."},
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", testBaseURL+"/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+getAuthToken(t))
+	req.Header.Set("Content-Type", "application/json")
+
+	t.Logf("POST /v1/chat/completions (stream=false, model=%s)", payload["model"])
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	t.Logf("Status: %d", resp.StatusCode)
+
+	if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 503 {
+		t.Skipf("Upstream returned %d (check refresh_token/oauth_token/api_key in config.json): %s", resp.StatusCode, respBody)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result map[string]any
+	json.Unmarshal(respBody, &result)
+	prettyPrint(t, "OpenAI Chat Completion", result)
+}
 
 func TestAuthRejection(t *testing.T) {
 	endpoints := []struct {
@@ -257,6 +335,7 @@ func TestAuthRejection(t *testing.T) {
 		{"GET", "/v1/models"},
 		{"POST", "/v1/messages"},
 		{"POST", "/v1/responses"},
+		{"POST", "/v1/chat/completions"},
 	}
 
 	for _, ep := range endpoints {
@@ -274,13 +353,13 @@ func TestAuthRejection(t *testing.T) {
 			if resp.StatusCode != 401 {
 				t.Errorf("expected 401, got %d", resp.StatusCode)
 			} else {
-				t.Logf("✓ %s %s correctly rejected with 401", ep.method, ep.path)
+				t.Logf("?%s %s correctly rejected with 401", ep.method, ep.path)
 			}
 		})
 	}
 }
 
-// ── Run all tests as a client command ──
+//  Run all tests as a client command
 
 func TestClient(t *testing.T) {
 	if _, err := http.Get(testBaseURL + "/health"); err != nil {
@@ -305,10 +384,12 @@ func TestClient(t *testing.T) {
 	}
 	if hasOpenAI {
 		t.Run("OpenAI/Stream", TestOpenAIResponsesStream)
+		t.Run("OpenAI/ChatCompletions/Stream", TestOpenAIChatCompletionsStream)
+		t.Run("OpenAI/ChatCompletions/NonStream", TestOpenAIChatCompletionsNonStream)
 	}
 }
 
-// ── Helpers ──
+//  Helpers
 
 func readSSEStream(t *testing.T, body io.Reader, platform string) {
 	t.Helper()
@@ -349,7 +430,7 @@ func readSSEStream(t *testing.T, body io.Reader, platform string) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		t.Logf("⚠ scanner error: %v", err)
+		t.Logf("?scanner error: %v", err)
 	}
 
 	assembled := strings.Join(textParts, "")
@@ -360,7 +441,7 @@ func readSSEStream(t *testing.T, body io.Reader, platform string) {
 func extractTextFromSSE(event map[string]any, platform string) string {
 	switch platform {
 	case "Claude":
-		// Claude SSE: event type "content_block_delta" → delta.text
+		// Claude SSE: event type "content_block_delta" -> delta.text
 		if eventType, _ := event["type"].(string); eventType == "content_block_delta" {
 			if delta, ok := event["delta"].(map[string]any); ok {
 				if text, ok := delta["text"].(string); ok {
@@ -369,10 +450,21 @@ func extractTextFromSSE(event map[string]any, platform string) string {
 			}
 		}
 	case "OpenAI":
-		// OpenAI SSE: type "response.output_text.delta" → delta
+		// OpenAI SSE: type "response.output_text.delta" -> delta
 		if eventType, _ := event["type"].(string); eventType == "response.output_text.delta" {
 			if delta, ok := event["delta"].(string); ok {
 				return delta
+			}
+		}
+	case "OpenAIChat":
+		// Chat Completions SSE: choices[0].delta.content
+		if choices, ok := event["choices"].([]any); ok && len(choices) > 0 {
+			if choice, ok := choices[0].(map[string]any); ok {
+				if delta, ok := choice["delta"].(map[string]any); ok {
+					if content, ok := delta["content"].(string); ok {
+						return content
+					}
+				}
 			}
 		}
 	}
