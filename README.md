@@ -107,6 +107,7 @@ Main fields:
 - `model_extra_params`: default extra params by model (supports `*`)
 - `enable_request_log`: enable request/response error logging
 - `enable_stream_debug_log`: verbose stream line logging
+- `enable_model_debug_log`: log upstream model request payloads and downstream client responses
 - `max_account_switches`: maximum failover switches per request
 - `sticky_session_ttl`: sticky routing TTL (duration string)
 - `stream_read_timeout`: stream inactivity timeout (duration string)

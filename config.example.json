@@ -81,6 +81,7 @@
   },
   "enable_request_log": true,
   "enable_stream_debug_log": false,
+  "enable_model_debug_log": false,
   "max_account_switches": 5,
   "sticky_session_ttl": "1h",
   "stream_read_timeout": "5m"

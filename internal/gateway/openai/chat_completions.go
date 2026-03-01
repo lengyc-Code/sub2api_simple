@@ -251,37 +251,64 @@ func convertChatMessagesToResponsesInput(rawMessages any) []any {
 		}
 
 		role, _ := msg["role"].(string)
-		if strings.TrimSpace(role) == "" {
+		role = strings.ToLower(strings.TrimSpace(role))
+		if role == "" {
 			role = "user"
 		}
 
-		out := map[string]any{
-			"role": role,
-		}
-		if name, _ := msg["name"].(string); strings.TrimSpace(name) != "" {
-			out["name"] = name
-		}
-		if toolCallID, _ := msg["tool_call_id"].(string); strings.TrimSpace(toolCallID) != "" {
-			out["tool_call_id"] = toolCallID
-			out["call_id"] = toolCallID
+		if role == "tool" {
+			if output, ok := convertToolMessageToFunctionCallOutput(msg); ok {
+				result = append(result, output)
+			}
+			continue
 		}
 
-		if content := convertMessageContent(role, msg["content"]); len(content) > 0 {
-			out["content"] = content
+		content := convertMessageContent(role, msg["content"])
+		hasContent := len(content) > 0
+
+		if hasContent || role != "assistant" {
+			out := map[string]any{
+				"role": role,
+			}
+			if name, _ := msg["name"].(string); strings.TrimSpace(name) != "" {
+				out["name"] = name
+			}
+			if toolCallID, _ := msg["tool_call_id"].(string); strings.TrimSpace(toolCallID) != "" {
+				out["tool_call_id"] = toolCallID
+				out["call_id"] = toolCallID
+			}
+			if hasContent {
+				out["content"] = content
+			}
+			result = append(result, out)
 		}
+
 		if role == "assistant" {
 			if toolCalls := convertAssistantToolCalls(msg["tool_calls"]); len(toolCalls) > 0 {
-				if existing, _ := out["content"].([]any); len(existing) > 0 {
-					out["content"] = append(existing, toolCalls...)
-				} else {
-					out["content"] = toolCalls
-				}
+				result = append(result, toolCalls...)
 			}
 		}
-
-		result = append(result, out)
 	}
 	return result
+}
+
+func convertToolMessageToFunctionCallOutput(msg map[string]any) (map[string]any, bool) {
+	callID, _ := msg["tool_call_id"].(string)
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		callID, _ = msg["call_id"].(string)
+		callID = strings.TrimSpace(callID)
+	}
+	if callID == "" {
+		return nil, false
+	}
+
+	output := extractMessageText(msg["content"])
+	return map[string]any{
+		"type":    "function_call_output",
+		"call_id": callID,
+		"output":  output,
+	}, true
 }
 
 func convertAssistantToolCalls(raw any) []any {
@@ -309,6 +336,10 @@ func convertAssistantToolCalls(raw any) []any {
 			continue
 		}
 		callID, _ := tc["id"].(string)
+		callID = strings.TrimSpace(callID)
+		if callID == "" {
+			callID = fmt.Sprintf("call_%d", time.Now().UnixNano())
+		}
 		out = append(out, map[string]any{
 			"type":      "function_call",
 			"name":      name,
@@ -347,6 +378,32 @@ func convertMessageContent(role string, raw any) []any {
 		return out
 	default:
 		return nil
+	}
+}
+
+func extractMessageText(raw any) string {
+	switch v := raw.(type) {
+	case string:
+		return v
+	case []any:
+		var b strings.Builder
+		for _, item := range v {
+			part, _ := item.(map[string]any)
+			if part == nil {
+				continue
+			}
+			text, _ := part["text"].(string)
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			if b.Len() > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(text)
+		}
+		return b.String()
+	default:
+		return ""
 	}
 }
 

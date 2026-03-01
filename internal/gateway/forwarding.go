@@ -48,6 +48,7 @@ func (g *Gateway) forwardWithFailover(
 		}
 
 		reqBody := prepareBody(account, body, model)
+		g.logModelUpstreamRequest(platform, account.Config.Name, model, reqBody)
 		upstreamReq, err := buildReq(r.Context(), account, reqBody, model, stream)
 		if err != nil {
 			account.ReleaseSlot()
@@ -105,7 +106,7 @@ func (g *Gateway) forwardWithFailover(
 				log.Printf("[stream][debug] account=%q model=%q upstream is not SSE, content_type=%q",
 					account.Config.Name, model, resp.Header.Get("Content-Type"))
 			}
-			g.handleNonStreamingResponse(w, resp, account)
+			g.handleNonStreamingResponse(w, resp, account, model)
 		}
 		return
 	}
@@ -195,6 +196,9 @@ func (g *Gateway) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 					ev.line,
 				)
 			}
+			if g.modelDebugLoggingEnabled() && strings.TrimSpace(ev.line) != "" {
+				g.logModelDownstreamResponse(account.Config.Platform, account.Config.Name, model, http.StatusOK, []byte(ev.line))
+			}
 
 			_, writeErr := fmt.Fprintf(w, "%s\n", ev.line)
 			if writeErr != nil {
@@ -229,6 +233,7 @@ func (g *Gateway) handleOpenAISSEAsNonStreamingResponse(w http.ResponseWriter, r
 		writeOpenAIError(w, http.StatusBadGateway, "api_error", "Failed to encode aggregated response")
 		return
 	}
+	g.logModelDownstreamResponse(platformOpenAI, account.Config.Name, model, http.StatusOK, body)
 
 	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
 		w.Header().Set("x-request-id", reqID)
@@ -253,12 +258,20 @@ func (g *Gateway) handleSSEAsPlainNonStreamingResponse(w http.ResponseWriter, re
 	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
 		w.Header().Set("x-request-id", reqID)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	payload := map[string]any{
 		"type": "sse_aggregated_response",
 		"text": text,
-	})
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		writeErrorJSON(w, http.StatusBadGateway, "api_error", "Failed to encode aggregated response")
+		return
+	}
+	g.logModelDownstreamResponse(account.Config.Platform, account.Config.Name, model, http.StatusOK, body)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 func (g *Gateway) readOpenAISSEAsJSON(body io.Reader, account *Account, model string) (map[string]any, error) {
@@ -408,7 +421,7 @@ func (g *Gateway) streamReadTimeout() time.Duration {
 }
 
 // handleNonStreamingResponse reads the full upstream response and writes it to the client.
-func (g *Gateway) handleNonStreamingResponse(w http.ResponseWriter, resp *http.Response, account *Account) {
+func (g *Gateway) handleNonStreamingResponse(w http.ResponseWriter, resp *http.Response, account *Account, model string) {
 	defer resp.Body.Close()
 	defer account.ReleaseSlot()
 
@@ -417,6 +430,7 @@ func (g *Gateway) handleNonStreamingResponse(w http.ResponseWriter, resp *http.R
 		writeErrorJSON(w, http.StatusBadGateway, "api_error", "Failed to read upstream response")
 		return
 	}
+	g.logModelDownstreamResponse(account.Config.Platform, account.Config.Name, model, resp.StatusCode, body)
 
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {

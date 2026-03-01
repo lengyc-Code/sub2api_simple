@@ -71,6 +71,7 @@ func (g *Gateway) forwardOpenAIChatCompletionsWithFailover(
 		}
 
 		reqBody := g.prepareOpenAIBody(account, body, model)
+		g.logModelUpstreamRequest(platformOpenAI, account.Config.Name, model, reqBody)
 		upstreamReq, err := g.buildOpenAIUpstreamRequest(r.Context(), account, reqBody, model, stream)
 		if err != nil {
 			account.ReleaseSlot()
@@ -111,7 +112,7 @@ func (g *Gateway) forwardOpenAIChatCompletionsWithFailover(
 		account.RecordSuccess()
 
 		if resp.StatusCode != http.StatusOK {
-			g.handleNonStreamingResponse(w, resp, account)
+			g.handleNonStreamingResponse(w, resp, account, model)
 			return
 		}
 
@@ -152,13 +153,19 @@ func (g *Gateway) handleOpenAIChatCompletionsSSEAsNonStreamingResponse(
 	}
 
 	converted := openaihandler.ChatCompletionFromResponses(aggregated, model)
+	convertedBody, err := json.Marshal(converted)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadGateway, "api_error", "Failed to encode converted response")
+		return
+	}
+	g.logModelDownstreamResponse(platformOpenAI, account.Config.Name, model, http.StatusOK, convertedBody)
 
 	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
 		w.Header().Set("x-request-id", reqID)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(converted)
+	_, _ = w.Write(convertedBody)
 }
 
 func (g *Gateway) handleOpenAIChatCompletionsJSONAsNonStreamingResponse(
@@ -183,13 +190,19 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsNonStreamingResponse(
 	}
 
 	converted := openaihandler.ChatCompletionFromResponses(upstream, model)
+	convertedBody, err := json.Marshal(converted)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadGateway, "api_error", "Failed to encode converted response")
+		return
+	}
+	g.logModelDownstreamResponse(platformOpenAI, account.Config.Name, model, http.StatusOK, convertedBody)
 
 	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
 		w.Header().Set("x-request-id", reqID)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(converted)
+	_, _ = w.Write(convertedBody)
 }
 
 func (g *Gateway) handleOpenAIChatCompletionsJSONAsStreamingResponse(
@@ -246,16 +259,18 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsStreamingResponse(
 	}
 	w.WriteHeader(http.StatusOK)
 
-	if err := writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
+	if err := g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
 		chatID, chatModel, created, map[string]any{"role": "assistant"}, nil),
+		account, model,
 	); err != nil {
 		return
 	}
 	flusher.Flush()
 
 	if content != "" {
-		if err := writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
+		if err := g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
 			chatID, chatModel, created, map[string]any{"content": content}, nil),
+			account, model,
 		); err != nil {
 			return
 		}
@@ -278,8 +293,9 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsStreamingResponse(
 					},
 				},
 			}
-			if err := writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
+			if err := g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
 				chatID, chatModel, created, delta, nil),
+				account, model,
 			); err != nil {
 				return
 			}
@@ -288,9 +304,9 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsStreamingResponse(
 		finishReason = "tool_calls"
 	}
 
-	_ = writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
-		chatID, chatModel, created, map[string]any{}, finishReason),
-	)
+	_ = g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
+		chatID, chatModel, created, map[string]any{}, finishReason), account, model)
+	g.logModelDownstreamResponse(platformOpenAI, account.Config.Name, model, http.StatusOK, []byte("[DONE]"))
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }
@@ -365,9 +381,9 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 			reason = "stop"
 		}
 		finished = true
-		_ = writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
-			chatID, chatModel, created, map[string]any{}, reason),
-		)
+		_ = g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
+			chatID, chatModel, created, map[string]any{}, reason), account, model)
+		g.logModelDownstreamResponse(platformOpenAI, account.Config.Name, model, http.StatusOK, []byte("[DONE]"))
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	}
@@ -428,8 +444,9 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 					continue
 				}
 				if !roleSent {
-					if err := writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
+					if err := g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
 						chatID, chatModel, created, map[string]any{"role": "assistant"}, nil),
+						account, model,
 					); err != nil {
 						return
 					}
@@ -437,8 +454,9 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 					roleSent = true
 				}
 
-				if err := writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
+				if err := g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
 					chatID, chatModel, created, map[string]any{"content": delta}, nil),
+					account, model,
 				); err != nil {
 					return
 				}
@@ -466,8 +484,9 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 								},
 							},
 						}
-						if err := writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
+						if err := g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
 							chatID, chatModel, created, delta, nil),
+							account, model,
 						); err != nil {
 							return
 						}
@@ -493,10 +512,13 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 	}
 }
 
-func writeChatCompletionSSEChunk(w http.ResponseWriter, chunk map[string]any) error {
+func (g *Gateway) writeChatCompletionSSEChunk(w http.ResponseWriter, chunk map[string]any, account *Account, model string) error {
 	b, err := json.Marshal(chunk)
 	if err != nil {
 		return err
+	}
+	if account != nil {
+		g.logModelDownstreamResponse(platformOpenAI, account.Config.Name, model, http.StatusOK, b)
 	}
 	_, err = fmt.Fprintf(w, "data: %s\n\n", b)
 	return err

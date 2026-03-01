@@ -327,6 +327,120 @@ func TestOpenAIChatCompletionsNonStream(t *testing.T) {
 	prettyPrint(t, "OpenAI Chat Completion", result)
 }
 
+// OpenAI Chat Completions API (tool call, non-streaming)
+func TestOpenAIChatCompletionsToolCallNonStream(t *testing.T) {
+	payload := map[string]any{
+		"model":  "gpt-5.1-codex-mini",
+		"stream": false,
+		"messages": []map[string]any{
+			{"role": "system", "content": "You are a tool-using assistant. If a tool is available, call the tool first."},
+			{"role": "user", "content": "What's the weather in Shanghai now? Use the provided function."},
+		},
+		"tools": []map[string]any{
+			{
+				"type": "function",
+				"function": map[string]any{
+					"name":        "get_weather",
+					"description": "Get weather for a city",
+					"parameters": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"city": map[string]any{
+								"type": "string",
+							},
+						},
+						"required": []string{"city"},
+					},
+				},
+			},
+		},
+		"tool_choice": map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": "get_weather",
+			},
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", testBaseURL+"/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+getAuthToken(t))
+	req.Header.Set("Content-Type", "application/json")
+
+	t.Logf("POST /v1/chat/completions (tool_call, stream=false, model=%s)", payload["model"])
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	t.Logf("Status: %d", resp.StatusCode)
+
+	if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 503 {
+		t.Skipf("Upstream returned %d (check refresh_token/oauth_token/api_key in config.json): %s", resp.StatusCode, respBody)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		t.Fatalf("failed to parse response JSON: %v, body=%s", err, respBody)
+	}
+	prettyPrint(t, "OpenAI Chat Completion ToolCall", result)
+
+	choices, ok := result["choices"].([]any)
+	if !ok || len(choices) == 0 {
+		t.Fatalf("expected non-empty choices, got: %#v", result["choices"])
+	}
+	choice0, ok := choices[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected choices[0] object, got: %#v", choices[0])
+	}
+
+	finishReason, _ := choice0["finish_reason"].(string)
+	if finishReason != "tool_calls" {
+		t.Fatalf("expected finish_reason=tool_calls, got %q", finishReason)
+	}
+
+	message, ok := choice0["message"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected choices[0].message object, got: %#v", choice0["message"])
+	}
+	if role, _ := message["role"].(string); role != "assistant" {
+		t.Fatalf("expected message.role=assistant, got %q", role)
+	}
+
+	toolCalls, ok := message["tool_calls"].([]any)
+	if !ok || len(toolCalls) == 0 {
+		t.Fatalf("expected non-empty message.tool_calls, got: %#v", message["tool_calls"])
+	}
+	tc0, ok := toolCalls[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tool_calls[0] object, got: %#v", toolCalls[0])
+	}
+	if tcType, _ := tc0["type"].(string); tcType != "function" {
+		t.Fatalf("expected tool_calls[0].type=function, got %q", tcType)
+	}
+	if tcID, _ := tc0["id"].(string); strings.TrimSpace(tcID) == "" {
+		t.Fatalf("expected non-empty tool_calls[0].id")
+	}
+
+	fn, ok := tc0["function"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tool_calls[0].function object, got: %#v", tc0["function"])
+	}
+	if fnName, _ := fn["name"].(string); fnName != "get_weather" {
+		t.Fatalf("expected function.name=get_weather, got %q", fnName)
+	}
+	if fnArgs, _ := fn["arguments"].(string); strings.TrimSpace(fnArgs) == "" {
+		t.Fatalf("expected non-empty function.arguments")
+	}
+}
+
 func TestAuthRejection(t *testing.T) {
 	endpoints := []struct {
 		method string
@@ -386,6 +500,7 @@ func TestClient(t *testing.T) {
 		t.Run("OpenAI/Stream", TestOpenAIResponsesStream)
 		t.Run("OpenAI/ChatCompletions/Stream", TestOpenAIChatCompletionsStream)
 		t.Run("OpenAI/ChatCompletions/NonStream", TestOpenAIChatCompletionsNonStream)
+		t.Run("OpenAI/ChatCompletions/ToolCall", TestOpenAIChatCompletionsToolCallNonStream)
 	}
 }
 

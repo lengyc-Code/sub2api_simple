@@ -20,6 +20,7 @@ type Config struct {
 	ModelExtraParams          map[string]map[string]any `json:"model_extra_params"`
 	EnableRequestLog          bool                      `json:"enable_request_log"`
 	EnableStreamDebugLog      bool                      `json:"enable_stream_debug_log"`
+	EnableModelDebugLog       bool                      `json:"enable_model_debug_log"`
 	MaxAccountSwitches        int                       `json:"max_account_switches"`
 	StickySessionTTL          Duration                  `json:"sticky_session_ttl"`
 	StreamReadTimeout         Duration                  `json:"stream_read_timeout"`

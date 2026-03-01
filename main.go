@@ -46,6 +46,7 @@ func main() {
 	log.Printf("  Auth tokens: %d configured", len(cfg.AuthTokens))
 	log.Printf("  Request log enabled: %v", cfg.EnableRequestLog)
 	log.Printf("  Stream debug log enabled: %v", cfg.EnableStreamDebugLog)
+	log.Printf("  Model debug log enabled: %v", cfg.EnableModelDebugLog)
 	log.Printf("  Max failover switches: %d", cfg.MaxAccountSwitches)
 	log.Printf("  Sticky session TTL: %v", cfg.StickySessionTTL.Duration)
 
