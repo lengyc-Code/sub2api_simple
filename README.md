@@ -7,6 +7,7 @@
 - Unified HTTP API for:
   - `POST /v1/messages` (Anthropic-compatible)
   - `POST /v1/responses` and `POST /responses` (OpenAI-compatible)
+  - `POST /v1/chat/completions` (OpenAI Chat Completions-compatible)
   - `GET /v1/models`
   - `GET /health`
 - Multi-account pool with:
@@ -134,6 +135,8 @@ Common auth patterns:
   - OpenAI-compatible responses API proxy
 - `POST /responses`
   - Alias of `/v1/responses`
+- `POST /v1/chat/completions`
+  - OpenAI Chat Completions-compatible proxy (request/response format conversion)
 - `GET /v1/models`
   - Combined model list based on configured platforms
 - `GET /health`

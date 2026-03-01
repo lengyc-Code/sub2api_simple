@@ -357,11 +357,12 @@ func (g *Gateway) streamDebugLoggingEnabled() bool {
 
 func (g *Gateway) dispatchHTTP(w http.ResponseWriter, r *http.Request) {
 	router.Dispatch(w, r, router.Handlers{
-		ClaudeMessages:  g.handleClaudeMessages,
-		Models:          g.handleModels,
-		OpenAIResponses: g.handleOpenAIResponses,
-		AuthLogin:       g.handleAuthLogin,
-		Health:          g.handleHealth,
+		ClaudeMessages:        g.handleClaudeMessages,
+		Models:                g.handleModels,
+		OpenAIResponses:       g.handleOpenAIResponses,
+		OpenAIChatCompletions: g.handleOpenAIChatCompletions,
+		AuthLogin:             g.handleAuthLogin,
+		Health:                g.handleHealth,
 		NotFound: func(w http.ResponseWriter, r *http.Request) {
 			writeErrorJSON(w, http.StatusNotFound, "not_found", "Unknown endpoint: "+r.URL.Path)
 		},
