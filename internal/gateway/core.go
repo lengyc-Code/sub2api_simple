@@ -71,12 +71,17 @@ type loggingResponseWriter struct {
 	bytesWritten      int
 	responseSnippet   bytes.Buffer
 	responseTruncated bool
+	snippetLimit      int
 }
 
-func newLoggingResponseWriter(w http.ResponseWriter) *loggingResponseWriter {
+func newLoggingResponseWriter(w http.ResponseWriter, snippetLimit int) *loggingResponseWriter {
+	if snippetLimit <= 0 {
+		snippetLimit = maxLogPayloadBytes
+	}
 	return &loggingResponseWriter{
 		ResponseWriter: w,
 		statusCode:     http.StatusOK,
+		snippetLimit:   snippetLimit,
 	}
 }
 
@@ -89,7 +94,7 @@ func (w *loggingResponseWriter) Write(b []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(b)
 	w.bytesWritten += n
 	if n > 0 {
-		appendLogSnippet(&w.responseSnippet, &w.responseTruncated, b[:n], maxLogPayloadBytes)
+		appendLogSnippet(&w.responseSnippet, &w.responseTruncated, b[:n], w.snippetLimit)
 	}
 	return n, err
 }
@@ -124,16 +129,23 @@ type requestBodyCapture struct {
 	body      io.ReadCloser
 	snippet   bytes.Buffer
 	truncated bool
+	limit     int
 }
 
-func newRequestBodyCapture(body io.ReadCloser) *requestBodyCapture {
-	return &requestBodyCapture{body: body}
+func newRequestBodyCapture(body io.ReadCloser, limit int) *requestBodyCapture {
+	if limit <= 0 {
+		limit = maxLogPayloadBytes
+	}
+	return &requestBodyCapture{
+		body:  body,
+		limit: limit,
+	}
 }
 
 func (c *requestBodyCapture) Read(p []byte) (int, error) {
 	n, err := c.body.Read(p)
 	if n > 0 {
-		appendLogSnippet(&c.snippet, &c.truncated, p[:n], maxLogPayloadBytes)
+		appendLogSnippet(&c.snippet, &c.truncated, p[:n], c.limit)
 	}
 	return n, err
 }
@@ -286,32 +298,27 @@ func (g *Gateway) getOpenAIAccessToken(ctx context.Context, account *Account) (t
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !g.requestLoggingEnabled() {
+	requestLogEnabled := g.requestLoggingEnabled()
+	modelDebugEnabled := g.modelDebugLoggingEnabled() && shouldLogModelDebugForRequest(r)
+
+	if !requestLogEnabled && !modelDebugEnabled {
 		g.dispatchHTTP(w, r)
 		return
 	}
 
+	snippetLimit := maxLogPayloadBytes
+	if modelDebugEnabled && maxModelDebugLogPayloadBytes > snippetLimit {
+		snippetLimit = maxModelDebugLogPayloadBytes
+	}
+
 	start := time.Now()
-	lw := newLoggingResponseWriter(w)
-	bodyCapture := newRequestBodyCapture(r.Body)
+	lw := newLoggingResponseWriter(w, snippetLimit)
+	bodyCapture := newRequestBodyCapture(r.Body, snippetLimit)
 	r.Body = bodyCapture
 	defer func() {
 		duration := time.Since(start).Round(time.Millisecond)
 		uri := requestURI(r)
 		clientIP := clientIPFromRequest(r)
-		log.Printf("[http] %s %s status=%d bytes=%d duration=%s ip=%s ua=%q",
-			r.Method,
-			uri,
-			lw.statusCode,
-			lw.bytesWritten,
-			duration,
-			clientIP,
-			r.UserAgent(),
-		)
-		if lw.statusCode == http.StatusOK || lw.statusCode == http.StatusNotFound {
-			return
-		}
-
 		reqBodyRaw, captured, reqBodyTruncated := bodyCapture.requestBodyForLog()
 		reqBody := ""
 		if captured {
@@ -324,6 +331,27 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		respBodyRaw, respBodyTruncated := lw.responseBodyForLog()
 		respBody := payloadForLog(respBodyRaw, respBodyTruncated)
+
+		if modelDebugEnabled {
+			g.logModelClientRequest(r, clientIP, reqBody)
+			g.logModelClientResponse(r, lw.statusCode, lw.bytesWritten, lw.Header(), respBody)
+		}
+
+		if !requestLogEnabled {
+			return
+		}
+		log.Printf("[http] %s %s status=%d bytes=%d duration=%s ip=%s ua=%q",
+			r.Method,
+			uri,
+			lw.statusCode,
+			lw.bytesWritten,
+			duration,
+			clientIP,
+			r.UserAgent(),
+		)
+		if lw.statusCode == http.StatusOK || lw.statusCode == http.StatusNotFound {
+			return
+		}
 
 		log.Printf("[http][detail] method=%s uri=%s status=%d ip=%s req_query=%q req_headers=%s req_body=%q resp_headers=%s resp_body=%q",
 			r.Method,

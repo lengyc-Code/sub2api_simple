@@ -71,13 +71,13 @@ func (g *Gateway) forwardOpenAIChatCompletionsWithFailover(
 		}
 
 		reqBody := g.prepareOpenAIBody(account, body, model)
-		g.logModelUpstreamRequest(platformOpenAI, account.Config.Name, model, reqBody)
 		upstreamReq, err := g.buildOpenAIUpstreamRequest(r.Context(), account, reqBody, model, stream)
 		if err != nil {
 			account.ReleaseSlot()
 			writeOpenAIError(w, http.StatusInternalServerError, "api_error", "Failed to build upstream request")
 			return
 		}
+		g.logModelProviderRequest(platformOpenAI, account.Config.Name, model, upstreamReq, reqBody)
 
 		resp, err := g.getHTTPClient(account).Do(upstreamReq)
 		if err != nil {
@@ -90,6 +90,8 @@ func (g *Gateway) forwardOpenAIChatCompletionsWithFailover(
 		}
 
 		if forwarder.ShouldFailover(resp.StatusCode) {
+			failBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxModelDebugLogPayloadBytes))
+			g.logModelProviderResponse(platformOpenAI, account.Config.Name, model, resp.StatusCode, resp.Header, failBody)
 			forwarder.DrainAndClose(resp.Body)
 			account.ReleaseSlot()
 			account.RecordError()
@@ -151,6 +153,10 @@ func (g *Gateway) handleOpenAIChatCompletionsSSEAsNonStreamingResponse(
 		writeOpenAIError(w, http.StatusBadGateway, "api_error", "Failed to aggregate upstream stream response")
 		return
 	}
+	upstreamBody, err := json.Marshal(aggregated)
+	if err == nil {
+		g.logModelProviderResponse(platformOpenAI, account.Config.Name, model, resp.StatusCode, resp.Header, upstreamBody)
+	}
 
 	converted := openaihandler.ChatCompletionFromResponses(aggregated, model)
 	convertedBody, err := json.Marshal(converted)
@@ -158,7 +164,6 @@ func (g *Gateway) handleOpenAIChatCompletionsSSEAsNonStreamingResponse(
 		writeOpenAIError(w, http.StatusBadGateway, "api_error", "Failed to encode converted response")
 		return
 	}
-	g.logModelDownstreamResponse(platformOpenAI, account.Config.Name, model, http.StatusOK, convertedBody)
 
 	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
 		w.Header().Set("x-request-id", reqID)
@@ -182,6 +187,7 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsNonStreamingResponse(
 		writeOpenAIError(w, http.StatusBadGateway, "api_error", "Failed to read upstream response")
 		return
 	}
+	g.logModelProviderResponse(platformOpenAI, account.Config.Name, model, resp.StatusCode, resp.Header, body)
 
 	var upstream map[string]any
 	if err := json.Unmarshal(body, &upstream); err != nil {
@@ -195,7 +201,6 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsNonStreamingResponse(
 		writeOpenAIError(w, http.StatusBadGateway, "api_error", "Failed to encode converted response")
 		return
 	}
-	g.logModelDownstreamResponse(platformOpenAI, account.Config.Name, model, http.StatusOK, convertedBody)
 
 	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
 		w.Header().Set("x-request-id", reqID)
@@ -225,6 +230,7 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsStreamingResponse(
 		writeOpenAIError(w, http.StatusBadGateway, "api_error", "Failed to read upstream response")
 		return
 	}
+	g.logModelProviderResponse(platformOpenAI, account.Config.Name, model, resp.StatusCode, resp.Header, body)
 
 	var upstream map[string]any
 	if err := json.Unmarshal(body, &upstream); err != nil {
@@ -306,7 +312,6 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsStreamingResponse(
 
 	_ = g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
 		chatID, chatModel, created, map[string]any{}, finishReason), account, model)
-	g.logModelDownstreamResponse(platformOpenAI, account.Config.Name, model, http.StatusOK, []byte("[DONE]"))
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }
@@ -319,6 +324,7 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 ) {
 	defer resp.Body.Close()
 	defer account.ReleaseSlot()
+	g.logModelProviderResponse(platformOpenAI, account.Config.Name, model, resp.StatusCode, resp.Header, nil)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -383,7 +389,6 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 		finished = true
 		_ = g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
 			chatID, chatModel, created, map[string]any{}, reason), account, model)
-		g.logModelDownstreamResponse(platformOpenAI, account.Config.Name, model, http.StatusOK, []byte("[DONE]"))
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	}
@@ -410,6 +415,9 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 			timer.Reset(streamTimeout)
 
 			line := strings.TrimSpace(ev.line)
+			if g.modelDebugLoggingEnabled() && line != "" {
+				g.logModelProviderResponse(platformOpenAI, account.Config.Name, model, resp.StatusCode, nil, []byte(line))
+			}
 			if line == "" || !strings.HasPrefix(line, "data:") {
 				continue
 			}
@@ -513,12 +521,11 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 }
 
 func (g *Gateway) writeChatCompletionSSEChunk(w http.ResponseWriter, chunk map[string]any, account *Account, model string) error {
+	_ = account
+	_ = model
 	b, err := json.Marshal(chunk)
 	if err != nil {
 		return err
-	}
-	if account != nil {
-		g.logModelDownstreamResponse(platformOpenAI, account.Config.Name, model, http.StatusOK, b)
 	}
 	_, err = fmt.Fprintf(w, "data: %s\n\n", b)
 	return err
