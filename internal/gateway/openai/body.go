@@ -79,6 +79,7 @@ func PrepareBody(body []byte, opts PrepareOptions) []byte {
 			"frequency_penalty", "presence_penalty",
 			"metadata",
 			"prompt_cache_retention",
+			"stream_options",
 		} {
 			if _, ok := parsed[key]; ok {
 				delete(parsed, key)
