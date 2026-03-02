@@ -72,17 +72,15 @@ func PrepareBody(body []byte, opts PrepareOptions) []byte {
 			parsed["stream"] = true
 			modified = true
 		}
+		if applyOAuthCompatAliases(parsed) {
+			modified = true
+		}
 
 		for _, key := range []string{
 			"max_output_tokens", "max_completion_tokens",
 			"temperature", "top_p",
 			"frequency_penalty", "presence_penalty",
-			"metadata",
-			"prompt_cache_retention",
 			"stream_options",
-			"user",
-			"reasoning_effort",
-			"response_format",
 		} {
 			if _, ok := parsed[key]; ok {
 				delete(parsed, key)
@@ -122,4 +120,53 @@ func PrepareBody(body []byte, opts PrepareOptions) []byte {
 		return body
 	}
 	return newBody
+}
+
+func applyOAuthCompatAliases(parsed map[string]any) bool {
+	modified := false
+
+	if v, ok := parsed["reasoning_effort"]; ok {
+		if effort, ok := v.(string); ok && strings.TrimSpace(effort) != "" {
+			reasoning, _ := parsed["reasoning"].(map[string]any)
+			if reasoning == nil {
+				reasoning = map[string]any{}
+				parsed["reasoning"] = reasoning
+				modified = true
+			}
+			if current, ok := reasoning["effort"].(string); !ok || strings.TrimSpace(current) == "" {
+				reasoning["effort"] = effort
+				modified = true
+			}
+		}
+		delete(parsed, "reasoning_effort")
+		modified = true
+	}
+
+	if v, ok := parsed["response_format"]; ok {
+		textCfg, _ := parsed["text"].(map[string]any)
+		if textCfg == nil {
+			textCfg = map[string]any{}
+			parsed["text"] = textCfg
+			modified = true
+		}
+		if _, exists := textCfg["format"]; !exists {
+			textCfg["format"] = v
+			modified = true
+		}
+		delete(parsed, "response_format")
+		modified = true
+	}
+
+	if v, ok := parsed["user"]; ok {
+		if _, exists := parsed["safety_identifier"]; !exists {
+			if userID, ok := v.(string); ok && strings.TrimSpace(userID) != "" {
+				parsed["safety_identifier"] = userID
+				modified = true
+			}
+		}
+		delete(parsed, "user")
+		modified = true
+	}
+
+	return modified
 }

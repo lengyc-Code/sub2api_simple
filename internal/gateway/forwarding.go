@@ -225,7 +225,7 @@ func (g *Gateway) handleOpenAISSEAsNonStreamingResponse(w http.ResponseWriter, r
 
 	aggregated, err := g.readOpenAISSEAsJSON(resp.Body, account, model)
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "api_error", "Failed to aggregate upstream stream response")
+		g.writeOpenAISSEAggregationError(w, err)
 		return
 	}
 
@@ -240,6 +240,35 @@ func (g *Gateway) handleOpenAISSEAsNonStreamingResponse(w http.ResponseWriter, r
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+func (g *Gateway) writeOpenAISSEAggregationError(w http.ResponseWriter, err error) {
+	streamErr, ok := forwarder.AsOpenAIStreamError(err)
+	if ok {
+		errType := strings.TrimSpace(streamErr.Type)
+		if errType == "" {
+			errType = "api_error"
+		}
+		status := http.StatusBadGateway
+		switch errType {
+		case "invalid_request_error":
+			status = http.StatusBadRequest
+		case "authentication_error":
+			status = http.StatusUnauthorized
+		case "permission_error":
+			status = http.StatusForbidden
+		}
+
+		message := strings.TrimSpace(streamErr.Message)
+		if message == "" {
+			message = "OpenAI stream returned an error event"
+		}
+		writeOpenAIError(w, status, errType, message)
+		return
+	}
+
+	log.Printf("[openai] failed to aggregate upstream stream response: %v", err)
+	writeOpenAIError(w, http.StatusBadGateway, "api_error", "Failed to aggregate upstream stream response: "+err.Error())
 }
 
 // handleSSEAsPlainNonStreamingResponse is a best-effort fallback for non-OpenAI

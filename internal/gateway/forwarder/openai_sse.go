@@ -2,6 +2,7 @@ package forwarder
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,31 @@ type OpenAISSEAccumulator struct {
 	model       string
 	textBuilder strings.Builder
 	lastResp    map[string]any
+}
+
+type OpenAIStreamError struct {
+	Message string
+	Type    string
+	Code    string
+}
+
+func (e *OpenAIStreamError) Error() string {
+	if e == nil {
+		return "openai stream error"
+	}
+	msg := strings.TrimSpace(e.Message)
+	if msg == "" {
+		msg = "openai stream error"
+	}
+	return msg
+}
+
+func AsOpenAIStreamError(err error) (*OpenAIStreamError, bool) {
+	var streamErr *OpenAIStreamError
+	if !errors.As(err, &streamErr) {
+		return nil, false
+	}
+	return streamErr, true
 }
 
 func NewOpenAISSEAccumulator(model string) *OpenAISSEAccumulator {
@@ -42,12 +68,26 @@ func (a *OpenAISSEAccumulator) ConsumeLine(line string) error {
 		}
 	}
 	if evtType, _ := evt["type"].(string); evtType == "error" {
+		streamErr := &OpenAIStreamError{Type: "api_error"}
 		if e, ok := evt["error"].(map[string]any); ok {
 			if msg, _ := e["message"].(string); msg != "" {
-				return fmt.Errorf("openai stream error: %s", msg)
+				streamErr.Message = msg
+			}
+			if typ, _ := e["type"].(string); strings.TrimSpace(typ) != "" {
+				streamErr.Type = typ
+			}
+			if code, _ := e["code"].(string); strings.TrimSpace(code) != "" {
+				streamErr.Code = code
 			}
 		}
-		return fmt.Errorf("openai stream error")
+		if strings.TrimSpace(streamErr.Message) == "" {
+			if code := strings.TrimSpace(streamErr.Code); code != "" {
+				streamErr.Message = fmt.Sprintf("openai stream error (%s)", code)
+			} else {
+				streamErr.Message = "openai stream error"
+			}
+		}
+		return streamErr
 	}
 
 	if respObj, ok := evt["response"].(map[string]any); ok {

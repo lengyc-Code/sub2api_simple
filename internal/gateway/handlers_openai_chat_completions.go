@@ -150,7 +150,7 @@ func (g *Gateway) handleOpenAIChatCompletionsSSEAsNonStreamingResponse(
 
 	aggregated, err := g.readOpenAISSEAsJSON(resp.Body, account, model)
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "api_error", "Failed to aggregate upstream stream response")
+		g.writeOpenAISSEAggregationError(w, err)
 		return
 	}
 	upstreamBody, err := json.Marshal(aggregated)
