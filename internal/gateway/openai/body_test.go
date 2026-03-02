@@ -83,3 +83,89 @@ func TestPrepareBody_OAuthParamAdaptation(t *testing.T) {
 		t.Fatalf("expected safety_identifier=user_123, got %q", sid)
 	}
 }
+
+func TestPrepareBody_OAuthResponseFormatJSONSchemaNestedFlatten(t *testing.T) {
+	input := map[string]any{
+		"model": "gpt-5.1",
+		"response_format": map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name": "answer_schema",
+				"schema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"answer": map[string]any{"type": "string"},
+					},
+					"required": []any{"answer"},
+				},
+				"strict": true,
+			},
+		},
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+
+	out := PrepareBody(body, PrepareOptions{OAuth: true})
+
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+
+	textCfg, _ := got["text"].(map[string]any)
+	if textCfg == nil {
+		t.Fatal("expected text config")
+	}
+	format, _ := textCfg["format"].(map[string]any)
+	if format == nil {
+		t.Fatal("expected text.format")
+	}
+	if typ, _ := format["type"].(string); typ != "json_schema" {
+		t.Fatalf("expected format.type=json_schema, got %q", typ)
+	}
+	if name, _ := format["name"].(string); name != "answer_schema" {
+		t.Fatalf("expected format.name=answer_schema, got %q", name)
+	}
+	if _, ok := format["schema"]; !ok {
+		t.Fatal("expected format.schema")
+	}
+}
+
+func TestPrepareBody_OAuthResponseFormatJSONSchemaDefaultName(t *testing.T) {
+	input := map[string]any{
+		"model": "gpt-5.1",
+		"response_format": map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"schema": map[string]any{
+					"type": "object",
+				},
+			},
+		},
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+
+	out := PrepareBody(body, PrepareOptions{OAuth: true})
+
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+
+	textCfg, _ := got["text"].(map[string]any)
+	if textCfg == nil {
+		t.Fatal("expected text config")
+	}
+	format, _ := textCfg["format"].(map[string]any)
+	if format == nil {
+		t.Fatal("expected text.format")
+	}
+	if name, _ := format["name"].(string); name != "output_schema" {
+		t.Fatalf("expected default format.name=output_schema, got %q", name)
+	}
+}

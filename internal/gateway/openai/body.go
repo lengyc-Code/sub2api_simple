@@ -150,7 +150,7 @@ func applyOAuthCompatAliases(parsed map[string]any) bool {
 			modified = true
 		}
 		if _, exists := textCfg["format"]; !exists {
-			textCfg["format"] = v
+			textCfg["format"] = normalizeResponseFormatForResponses(v)
 			modified = true
 		}
 		delete(parsed, "response_format")
@@ -169,4 +169,64 @@ func applyOAuthCompatAliases(parsed map[string]any) bool {
 	}
 
 	return modified
+}
+
+func normalizeResponseFormatForResponses(raw any) any {
+	switch v := raw.(type) {
+	case string:
+		formatType := strings.TrimSpace(v)
+		if formatType == "" {
+			return raw
+		}
+		return map[string]any{"type": formatType}
+	case map[string]any:
+		formatType, _ := v["type"].(string)
+		formatType = strings.TrimSpace(formatType)
+		if formatType != "json_schema" {
+			return raw
+		}
+
+		normalized := map[string]any{
+			"type": "json_schema",
+		}
+
+		// OAuth experimental Responses expects flattened json_schema fields
+		// under text.format (name/schema/strict), while Chat Completions
+		// commonly nests them under response_format.json_schema.
+		if nested, _ := v["json_schema"].(map[string]any); nested != nil {
+			if name, _ := nested["name"].(string); strings.TrimSpace(name) != "" {
+				normalized["name"] = name
+			}
+			if schema, ok := nested["schema"]; ok {
+				normalized["schema"] = schema
+			}
+			if strict, ok := nested["strict"]; ok {
+				normalized["strict"] = strict
+			}
+			if description, _ := nested["description"].(string); strings.TrimSpace(description) != "" {
+				normalized["description"] = description
+			}
+		}
+
+		if name, _ := v["name"].(string); strings.TrimSpace(name) != "" {
+			normalized["name"] = name
+		}
+		if schema, ok := v["schema"]; ok {
+			normalized["schema"] = schema
+		}
+		if strict, ok := v["strict"]; ok {
+			normalized["strict"] = strict
+		}
+		if description, _ := v["description"].(string); strings.TrimSpace(description) != "" {
+			normalized["description"] = description
+		}
+
+		if name, _ := normalized["name"].(string); strings.TrimSpace(name) == "" {
+			normalized["name"] = "output_schema"
+		}
+
+		return normalized
+	default:
+		return raw
+	}
 }
