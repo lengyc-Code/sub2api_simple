@@ -82,6 +82,7 @@ func PrepareBody(body []byte, opts PrepareOptions) []byte {
 			"stream_options",
 			"user",
 			"reasoning_effort",
+			"response_format",
 		} {
 			if _, ok := parsed[key]; ok {
 				delete(parsed, key)
