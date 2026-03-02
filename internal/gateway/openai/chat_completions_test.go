@@ -91,3 +91,109 @@ func TestConvertChatCompletionsRequest_ToolCallRoundTripInputs(t *testing.T) {
 		t.Fatalf("expected input[2].call_id=call_1, got %q", got)
 	}
 }
+
+func TestConvertChatCompletionsRequest_ResponseFormatJSONSchemaMapped(t *testing.T) {
+	req := map[string]any{
+		"model": "gpt-5.2",
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": "Return JSON only",
+			},
+		},
+		"response_format": map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"schema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"action": map[string]any{"type": "string"},
+					},
+					"required": []any{"action"},
+				},
+				"strict": true,
+			},
+		},
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	if err != nil {
+		t.Fatalf("convert request: %v", err)
+	}
+
+	var converted map[string]any
+	if err := json.Unmarshal(convertedBody, &converted); err != nil {
+		t.Fatalf("unmarshal converted: %v", err)
+	}
+
+	if _, ok := converted["response_format"]; ok {
+		t.Fatal("expected response_format removed")
+	}
+
+	textCfg, _ := converted["text"].(map[string]any)
+	if textCfg == nil {
+		t.Fatal("expected text config")
+	}
+	format, _ := textCfg["format"].(map[string]any)
+	if format == nil {
+		t.Fatal("expected text.format")
+	}
+	if got, _ := format["type"].(string); got != "json_schema" {
+		t.Fatalf("expected format.type=json_schema, got %q", got)
+	}
+	if got, _ := format["name"].(string); got != "output_schema" {
+		t.Fatalf("expected default format.name=output_schema, got %q", got)
+	}
+	if _, ok := format["schema"]; !ok {
+		t.Fatal("expected format.schema")
+	}
+}
+
+func TestConvertChatCompletionsRequest_ReasoningAndStreamOptionsCompat(t *testing.T) {
+	req := map[string]any{
+		"model":            "gpt-5.2",
+		"reasoning_effort": "high",
+		"stream_options": map[string]any{
+			"include_usage": true,
+		},
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": "hi",
+			},
+		},
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	if err != nil {
+		t.Fatalf("convert request: %v", err)
+	}
+
+	var converted map[string]any
+	if err := json.Unmarshal(convertedBody, &converted); err != nil {
+		t.Fatalf("unmarshal converted: %v", err)
+	}
+
+	if _, ok := converted["reasoning_effort"]; ok {
+		t.Fatal("expected reasoning_effort removed")
+	}
+	reasoning, _ := converted["reasoning"].(map[string]any)
+	if reasoning == nil {
+		t.Fatal("expected reasoning object")
+	}
+	if got, _ := reasoning["effort"].(string); got != "high" {
+		t.Fatalf("expected reasoning.effort=high, got %q", got)
+	}
+
+	if _, ok := converted["stream_options"]; ok {
+		t.Fatal("expected stream_options removed")
+	}
+}

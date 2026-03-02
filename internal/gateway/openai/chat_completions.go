@@ -60,6 +60,31 @@ func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]b
 		}
 		delete(parsed, "max_tokens")
 	}
+	if responseFormat, ok := parsed["response_format"]; ok {
+		textCfg, _ := parsed["text"].(map[string]any)
+		if textCfg == nil {
+			textCfg = map[string]any{}
+			parsed["text"] = textCfg
+		}
+		if _, exists := textCfg["format"]; !exists {
+			textCfg["format"] = normalizeResponseFormatForResponses(responseFormat)
+		}
+		delete(parsed, "response_format")
+	}
+	if reasoningEffort, ok := parsed["reasoning_effort"]; ok {
+		if effort, ok := reasoningEffort.(string); ok && strings.TrimSpace(effort) != "" {
+			reasoning, _ := parsed["reasoning"].(map[string]any)
+			if reasoning == nil {
+				reasoning = map[string]any{}
+				parsed["reasoning"] = reasoning
+			}
+			if _, exists := reasoning["effort"]; !exists {
+				reasoning["effort"] = effort
+			}
+		}
+		delete(parsed, "reasoning_effort")
+	}
+	delete(parsed, "stream_options")
 
 	// Responses API currently returns a single output; drop unsupported multi-choice hint.
 	delete(parsed, "n")
