@@ -165,9 +165,7 @@ func (g *Gateway) handleOpenAIChatCompletionsSSEAsNonStreamingResponse(
 		return
 	}
 
-	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
-		w.Header().Set("x-request-id", reqID)
-	}
+	copyUpstreamResponseHeaders(w.Header(), resp.Header)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(convertedBody)
@@ -202,9 +200,7 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsNonStreamingResponse(
 		return
 	}
 
-	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
-		w.Header().Set("x-request-id", reqID)
-	}
+	copyUpstreamResponseHeaders(w.Header(), resp.Header)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(convertedBody)
@@ -260,9 +256,7 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsStreamingResponse(
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
-		w.Header().Set("x-request-id", reqID)
-	}
+	copyUpstreamResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(http.StatusOK)
 
 	if err := g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
@@ -343,9 +337,7 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
-		w.Header().Set("x-request-id", reqID)
-	}
+	copyUpstreamResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(http.StatusOK)
 
 	type scanEvent struct {

@@ -136,9 +136,7 @@ func (g *Gateway) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
-		w.Header().Set("x-request-id", reqID)
-	}
+	copyUpstreamResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(http.StatusOK)
 
 	type scanEvent struct {
@@ -238,9 +236,7 @@ func (g *Gateway) handleOpenAISSEAsNonStreamingResponse(w http.ResponseWriter, r
 	}
 	g.logModelProviderResponse(platformOpenAI, account.Config.Name, model, resp.StatusCode, resp.Header, body)
 
-	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
-		w.Header().Set("x-request-id", reqID)
-	}
+	copyUpstreamResponseHeaders(w.Header(), resp.Header)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
@@ -258,9 +254,7 @@ func (g *Gateway) handleSSEAsPlainNonStreamingResponse(w http.ResponseWriter, re
 		return
 	}
 
-	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
-		w.Header().Set("x-request-id", reqID)
-	}
+	copyUpstreamResponseHeaders(w.Header(), resp.Header)
 	payload := map[string]any{
 		"type": "sse_aggregated_response",
 		"text": text,
@@ -439,9 +433,7 @@ func (g *Gateway) handleNonStreamingResponse(w http.ResponseWriter, resp *http.R
 	if contentType == "" {
 		contentType = "application/json"
 	}
-	if reqID := resp.Header.Get("x-request-id"); reqID != "" {
-		w.Header().Set("x-request-id", reqID)
-	}
+	copyUpstreamResponseHeaders(w.Header(), resp.Header)
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(resp.StatusCode)
 	w.Write(body)
