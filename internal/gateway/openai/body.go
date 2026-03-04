@@ -80,6 +80,8 @@ func PrepareBody(body []byte, opts PrepareOptions) []byte {
 			"max_output_tokens", "max_completion_tokens",
 			"temperature", "top_p",
 			"frequency_penalty", "presence_penalty",
+			"metadata",
+			"prompt_cache_retention",
 			"stream_options",
 		} {
 			if _, ok := parsed[key]; ok {

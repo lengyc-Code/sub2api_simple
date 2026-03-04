@@ -40,11 +40,11 @@ func TestPrepareBody_OAuthParamAdaptation(t *testing.T) {
 		t.Fatalf("expected stream=true, got %v", got["stream"])
 	}
 
-	if _, ok := got["metadata"]; !ok {
-		t.Fatal("expected metadata to be preserved")
+	if _, ok := got["metadata"]; ok {
+		t.Fatal("expected metadata to be removed for OAuth compatibility")
 	}
-	if _, ok := got["prompt_cache_retention"]; !ok {
-		t.Fatal("expected prompt_cache_retention to be preserved")
+	if _, ok := got["prompt_cache_retention"]; ok {
+		t.Fatal("expected prompt_cache_retention to be removed for OAuth compatibility")
 	}
 	if _, ok := got["stream_options"]; ok {
 		t.Fatal("expected stream_options to be removed")
