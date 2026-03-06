@@ -81,6 +81,7 @@ func PrepareBody(body []byte, opts PrepareOptions) []byte {
 			"frequency_penalty", "presence_penalty",
 			"metadata",
 			"safety_identifier",
+			"stream_options",
 			"max_completion_tokens", "user",
 			"prompt_cache_retention",
 		} {

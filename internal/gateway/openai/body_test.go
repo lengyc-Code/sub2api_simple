@@ -57,8 +57,8 @@ func TestPrepareBody_OAuthParamAdaptation(t *testing.T) {
 	if _, ok := got["prompt_cache_retention"]; ok {
 		t.Fatal("expected prompt_cache_retention to be removed for OAuth compatibility")
 	}
-	if streamOptions, _ := got["stream_options"].(map[string]any); streamOptions == nil {
-		t.Fatal("expected stream_options preserved")
+	if _, ok := got["stream_options"]; ok {
+		t.Fatal("expected stream_options removed for OAuth compatibility")
 	}
 	if gotMax, _ := got["max_output_tokens"].(float64); gotMax != 128 {
 		t.Fatalf("expected max_output_tokens=128, got %v", got["max_output_tokens"])
