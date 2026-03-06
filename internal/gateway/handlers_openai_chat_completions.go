@@ -517,7 +517,9 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 			case "response.output_item.added",
 				"response.output_item.done",
 				"response.function_call_arguments.delta",
-				"response.function_call_arguments.done":
+				"response.function_call_arguments.done",
+				"response.custom_tool_call_input.delta",
+				"response.custom_tool_call_input.done":
 				toolCallAccumulator.Consume(evtType, evt)
 			case "response.completed":
 				respObj, _ := evt["response"].(map[string]any)
@@ -597,6 +599,10 @@ func (a *chatCompletionToolCallAccumulator) Consume(evtType string, evt map[stri
 		a.consumeFunctionCallArgumentsDelta(evt)
 	case "response.function_call_arguments.done":
 		a.consumeFunctionCallArgumentsDone(evt)
+	case "response.custom_tool_call_input.delta":
+		a.consumeCustomToolCallInputDelta(evt)
+	case "response.custom_tool_call_input.done":
+		a.consumeCustomToolCallInputDone(evt)
 	}
 }
 
@@ -632,7 +638,7 @@ func (a *chatCompletionToolCallAccumulator) consumeOutputItem(evt map[string]any
 	}
 
 	itemType, _ := item["type"].(string)
-	if itemType != "function_call" && itemType != "tool_call" {
+	if itemType != "function_call" && itemType != "tool_call" && itemType != "custom_tool_call" {
 		return
 	}
 
@@ -645,6 +651,10 @@ func (a *chatCompletionToolCallAccumulator) consumeOutputItem(evt map[string]any
 	}
 	if args, _ := item["arguments"].(string); args != "" {
 		a.calls[idx].arguments = args
+		return
+	}
+	if input, _ := item["input"].(string); input != "" {
+		a.calls[idx].arguments = input
 	}
 }
 
@@ -671,6 +681,32 @@ func (a *chatCompletionToolCallAccumulator) consumeFunctionCallArgumentsDone(evt
 	}
 	if args, _ := evt["arguments"].(string); args != "" {
 		a.calls[idx].arguments = args
+	}
+}
+
+func (a *chatCompletionToolCallAccumulator) consumeCustomToolCallInputDelta(evt map[string]any) {
+	callID := firstNonEmptyString(evt["call_id"], evt["item_id"], evt["id"])
+	outputIndex := intFromAnyOrDefault(evt["output_index"], -1)
+	idx := a.ensureCall(callID, outputIndex)
+
+	if name, _ := evt["name"].(string); strings.TrimSpace(name) != "" {
+		a.calls[idx].name = name
+	}
+	if delta, _ := evt["delta"].(string); delta != "" {
+		a.calls[idx].arguments += delta
+	}
+}
+
+func (a *chatCompletionToolCallAccumulator) consumeCustomToolCallInputDone(evt map[string]any) {
+	callID := firstNonEmptyString(evt["call_id"], evt["item_id"], evt["id"])
+	outputIndex := intFromAnyOrDefault(evt["output_index"], -1)
+	idx := a.ensureCall(callID, outputIndex)
+
+	if name, _ := evt["name"].(string); strings.TrimSpace(name) != "" {
+		a.calls[idx].name = name
+	}
+	if input, _ := evt["input"].(string); input != "" {
+		a.calls[idx].arguments = input
 	}
 }
 

@@ -197,3 +197,53 @@ func TestConvertChatCompletionsRequest_ReasoningAndStreamOptionsCompat(t *testin
 		t.Fatal("expected stream_options removed")
 	}
 }
+
+func TestChatCompletionFromResponses_CustomToolCallMapped(t *testing.T) {
+	resp := map[string]any{
+		"id":         "resp_custom_tool",
+		"created_at": float64(1772773416),
+		"model":      "gpt-5.4",
+		"output": []any{
+			map[string]any{
+				"id":      "ctc_1",
+				"type":    "custom_tool_call",
+				"call_id": "call_patch_1",
+				"name":    "ApplyPatch",
+				"input":   "*** Begin Patch\n*** End Patch\n",
+			},
+		},
+	}
+
+	chat := ChatCompletionFromResponses(resp, "")
+	choices, _ := chat["choices"].([]any)
+	if len(choices) != 1 {
+		t.Fatalf("expected 1 choice, got %d", len(choices))
+	}
+	choice, _ := choices[0].(map[string]any)
+	if got, _ := choice["finish_reason"].(string); got != "tool_calls" {
+		t.Fatalf("expected finish_reason=tool_calls, got %q", got)
+	}
+
+	message, _ := choice["message"].(map[string]any)
+	if message == nil {
+		t.Fatal("expected message object")
+	}
+	toolCalls, _ := message["tool_calls"].([]any)
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(toolCalls))
+	}
+	tc, _ := toolCalls[0].(map[string]any)
+	if got, _ := tc["id"].(string); got != "call_patch_1" {
+		t.Fatalf("expected tool id call_patch_1, got %q", got)
+	}
+	fn, _ := tc["function"].(map[string]any)
+	if fn == nil {
+		t.Fatal("expected function object")
+	}
+	if got, _ := fn["name"].(string); got != "ApplyPatch" {
+		t.Fatalf("expected function name ApplyPatch, got %q", got)
+	}
+	if got, _ := fn["arguments"].(string); got != "*** Begin Patch\n*** End Patch\n" {
+		t.Fatalf("unexpected function arguments: %q", got)
+	}
+}

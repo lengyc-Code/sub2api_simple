@@ -568,8 +568,8 @@ func ExtractToolCallsFromResponses(resp map[string]any) []any {
 		}
 
 		itemType, _ := itemMap["type"].(string)
-		if itemType == "function_call" {
-			if tc, ok := toolCallFromFunctionCall(itemMap); ok {
+		if isResponsesToolCallType(itemType) {
+			if tc, ok := toolCallFromResponseToolCall(itemMap); ok {
 				toolCalls = append(toolCalls, tc)
 			}
 			continue
@@ -582,10 +582,10 @@ func ExtractToolCallsFromResponses(resp map[string]any) []any {
 				continue
 			}
 			partType, _ := partMap["type"].(string)
-			if partType != "function_call" && partType != "tool_call" {
+			if !isResponsesToolCallType(partType) {
 				continue
 			}
-			if tc, ok := toolCallFromFunctionCall(partMap); ok {
+			if tc, ok := toolCallFromResponseToolCall(partMap); ok {
 				toolCalls = append(toolCalls, tc)
 			}
 		}
@@ -593,12 +593,24 @@ func ExtractToolCallsFromResponses(resp map[string]any) []any {
 	return toolCalls
 }
 
-func toolCallFromFunctionCall(raw map[string]any) (map[string]any, bool) {
+func isResponsesToolCallType(itemType string) bool {
+	switch strings.TrimSpace(itemType) {
+	case "function_call", "tool_call", "custom_tool_call":
+		return true
+	default:
+		return false
+	}
+}
+
+func toolCallFromResponseToolCall(raw map[string]any) (map[string]any, bool) {
 	name, _ := raw["name"].(string)
 	if strings.TrimSpace(name) == "" {
 		return nil, false
 	}
 	args, _ := raw["arguments"].(string)
+	if strings.TrimSpace(args) == "" {
+		args, _ = raw["input"].(string)
+	}
 	callID, _ := raw["call_id"].(string)
 	if strings.TrimSpace(callID) == "" {
 		callID, _ = raw["id"].(string)

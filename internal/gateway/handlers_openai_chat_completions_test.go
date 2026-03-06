@@ -71,3 +71,51 @@ func TestChatCompletionToolCallAccumulator_ArgumentsDeltaAndDone(t *testing.T) {
 		t.Fatalf("unexpected finalized arguments: %q", toolCalls[0]["arguments"])
 	}
 }
+
+func TestChatCompletionToolCallAccumulator_CustomToolCallDeltaAndDone(t *testing.T) {
+	acc := newChatCompletionToolCallAccumulator()
+	acc.Consume("response.output_item.added", map[string]any{
+		"output_index": 3.0,
+		"item": map[string]any{
+			"type":    "custom_tool_call",
+			"id":      "call_patch_1",
+			"name":    "ApplyPatch",
+			"call_id": "call_patch_1",
+		},
+	})
+	acc.Consume("response.custom_tool_call_input.delta", map[string]any{
+		"output_index": 3.0,
+		"item_id":      "call_patch_1",
+		"delta":        "*** Begin Patch\n",
+	})
+	acc.Consume("response.custom_tool_call_input.delta", map[string]any{
+		"output_index": 3.0,
+		"item_id":      "call_patch_1",
+		"delta":        "*** End Patch\n",
+	})
+
+	toolCalls := acc.ToolCalls()
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(toolCalls))
+	}
+	if toolCalls[0]["name"] != "ApplyPatch" {
+		t.Fatalf("unexpected name: %q", toolCalls[0]["name"])
+	}
+	if toolCalls[0]["arguments"] != "*** Begin Patch\n*** End Patch\n" {
+		t.Fatalf("unexpected accumulated arguments: %q", toolCalls[0]["arguments"])
+	}
+
+	acc.Consume("response.custom_tool_call_input.done", map[string]any{
+		"output_index": 3.0,
+		"item_id":      "call_patch_1",
+		"input":        "*** Begin Patch\n*** Update File: a.go\n*** End Patch\n",
+	})
+
+	toolCalls = acc.ToolCalls()
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(toolCalls))
+	}
+	if toolCalls[0]["arguments"] != "*** Begin Patch\n*** Update File: a.go\n*** End Patch\n" {
+		t.Fatalf("unexpected finalized arguments: %q", toolCalls[0]["arguments"])
+	}
+}
