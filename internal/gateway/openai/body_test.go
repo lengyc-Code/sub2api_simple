@@ -46,8 +46,8 @@ func TestPrepareBody_OAuthParamAdaptation(t *testing.T) {
 		t.Fatalf("expected stream=true, got %v", got["stream"])
 	}
 
-	if metadata, _ := got["metadata"].(map[string]any); metadata == nil {
-		t.Fatal("expected metadata preserved")
+	if _, ok := got["metadata"]; ok {
+		t.Fatal("expected metadata removed for OAuth compatibility")
 	}
 	for _, key := range []string{"temperature", "top_p", "frequency_penalty", "presence_penalty"} {
 		if _, ok := got[key]; ok {

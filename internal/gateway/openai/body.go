@@ -79,6 +79,7 @@ func PrepareBody(body []byte, opts PrepareOptions) []byte {
 		for _, key := range []string{
 			"temperature", "top_p",
 			"frequency_penalty", "presence_penalty",
+			"metadata",
 			"max_completion_tokens", "user",
 			"prompt_cache_retention",
 		} {
