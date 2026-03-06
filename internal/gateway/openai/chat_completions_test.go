@@ -193,8 +193,292 @@ func TestConvertChatCompletionsRequest_ReasoningAndStreamOptionsCompat(t *testin
 		t.Fatalf("expected reasoning.effort=high, got %q", got)
 	}
 
-	if _, ok := converted["stream_options"]; ok {
-		t.Fatal("expected stream_options removed")
+	streamOptions, _ := converted["stream_options"].(map[string]any)
+	if streamOptions == nil {
+		t.Fatal("expected stream_options preserved")
+	}
+	if includeUsage, _ := streamOptions["include_usage"].(bool); !includeUsage {
+		t.Fatalf("expected stream_options.include_usage=true, got %#v", streamOptions["include_usage"])
+	}
+}
+
+func TestConvertChatCompletionsRequest_MaxCompletionTokensVerbosityAndWebSearchMapped(t *testing.T) {
+	req := map[string]any{
+		"model":                 "gpt-5.2",
+		"max_completion_tokens": float64(321),
+		"verbosity":             "low",
+		"web_search_options": map[string]any{
+			"user_location": map[string]any{
+				"type":    "approximate",
+				"country": "US",
+			},
+		},
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": "search this",
+			},
+		},
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	if err != nil {
+		t.Fatalf("convert request: %v", err)
+	}
+
+	var converted map[string]any
+	if err := json.Unmarshal(convertedBody, &converted); err != nil {
+		t.Fatalf("unmarshal converted: %v", err)
+	}
+
+	if _, ok := converted["max_completion_tokens"]; ok {
+		t.Fatal("expected max_completion_tokens removed")
+	}
+	if got, _ := converted["max_output_tokens"].(float64); got != 321 {
+		t.Fatalf("expected max_output_tokens=321, got %v", converted["max_output_tokens"])
+	}
+	if _, ok := converted["verbosity"]; ok {
+		t.Fatal("expected top-level verbosity removed")
+	}
+
+	textCfg, _ := converted["text"].(map[string]any)
+	if textCfg == nil {
+		t.Fatal("expected text config")
+	}
+	if got, _ := textCfg["verbosity"].(string); got != "low" {
+		t.Fatalf("expected text.verbosity=low, got %q", got)
+	}
+
+	tools, _ := converted["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+	tool, _ := tools[0].(map[string]any)
+	if got, _ := tool["type"].(string); got != "web_search" {
+		t.Fatalf("expected web_search tool, got %q", got)
+	}
+	userLocation, _ := tool["user_location"].(map[string]any)
+	if userLocation == nil {
+		t.Fatal("expected web_search user_location")
+	}
+	if got, _ := userLocation["country"].(string); got != "US" {
+		t.Fatalf("expected user_location.country=US, got %q", got)
+	}
+}
+
+func TestConvertChatCompletionsRequest_FileAndImageContentMapped(t *testing.T) {
+	req := map[string]any{
+		"model": "gpt-5.2",
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type": "file",
+						"file": map[string]any{
+							"file_id":  "file_123",
+							"filename": "notes.txt",
+						},
+					},
+					map[string]any{
+						"type": "image_url",
+						"image_url": map[string]any{
+							"url":    "https://example.com/image.png",
+							"detail": "high",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	if err != nil {
+		t.Fatalf("convert request: %v", err)
+	}
+
+	var converted map[string]any
+	if err := json.Unmarshal(convertedBody, &converted); err != nil {
+		t.Fatalf("unmarshal converted: %v", err)
+	}
+
+	input, _ := converted["input"].([]any)
+	if len(input) != 1 {
+		t.Fatalf("expected 1 input item, got %d", len(input))
+	}
+	msg, _ := input[0].(map[string]any)
+	content, _ := msg["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content parts, got %d", len(content))
+	}
+
+	filePart, _ := content[0].(map[string]any)
+	if got, _ := filePart["type"].(string); got != "input_file" {
+		t.Fatalf("expected input_file part, got %q", got)
+	}
+	if got, _ := filePart["file_id"].(string); got != "file_123" {
+		t.Fatalf("expected file_id=file_123, got %q", got)
+	}
+
+	imagePart, _ := content[1].(map[string]any)
+	if got, _ := imagePart["type"].(string); got != "input_image" {
+		t.Fatalf("expected input_image part, got %q", got)
+	}
+	if got, _ := imagePart["detail"].(string); got != "high" {
+		t.Fatalf("expected image detail=high, got %q", got)
+	}
+}
+
+func TestConvertChatCompletionsRequest_LogprobsMappedToInclude(t *testing.T) {
+	req := map[string]any{
+		"model":        "gpt-5.2",
+		"logprobs":     true,
+		"top_logprobs": float64(3),
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": "hi",
+			},
+		},
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	if err != nil {
+		t.Fatalf("convert request: %v", err)
+	}
+
+	var converted map[string]any
+	if err := json.Unmarshal(convertedBody, &converted); err != nil {
+		t.Fatalf("unmarshal converted: %v", err)
+	}
+
+	if _, ok := converted["logprobs"]; ok {
+		t.Fatal("expected logprobs removed")
+	}
+	if got, _ := converted["top_logprobs"].(float64); got != 3 {
+		t.Fatalf("expected top_logprobs=3, got %v", converted["top_logprobs"])
+	}
+	include, _ := converted["include"].([]any)
+	if len(include) != 1 {
+		t.Fatalf("expected 1 include entry, got %d", len(include))
+	}
+	if got, _ := include[0].(string); got != "message.output_text.logprobs" {
+		t.Fatalf("unexpected include entry %q", got)
+	}
+}
+
+func TestConvertChatCompletionsRequest_AllowedToolsToolChoiceMapped(t *testing.T) {
+	req := map[string]any{
+		"model": "gpt-5.2",
+		"tool_choice": map[string]any{
+			"type": "allowed_tools",
+			"mode": "auto",
+			"tools": []any{
+				map[string]any{
+					"type": "function",
+					"function": map[string]any{
+						"name": "get_weather",
+					},
+				},
+			},
+		},
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": "weather",
+			},
+		},
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	if err != nil {
+		t.Fatalf("convert request: %v", err)
+	}
+
+	var converted map[string]any
+	if err := json.Unmarshal(convertedBody, &converted); err != nil {
+		t.Fatalf("unmarshal converted: %v", err)
+	}
+
+	toolChoice, _ := converted["tool_choice"].(map[string]any)
+	if toolChoice == nil {
+		t.Fatal("expected tool_choice object")
+	}
+	if got, _ := toolChoice["type"].(string); got != "allowed_tools" {
+		t.Fatalf("expected allowed_tools, got %q", got)
+	}
+	tools, _ := toolChoice["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 allowed tool, got %d", len(tools))
+	}
+	tool, _ := tools[0].(map[string]any)
+	if got, _ := tool["name"].(string); got != "get_weather" {
+		t.Fatalf("expected allowed tool name get_weather, got %q", got)
+	}
+}
+
+func TestConvertChatCompletionsRequest_AudioRejected(t *testing.T) {
+	req := map[string]any{
+		"model":      "gpt-5.2",
+		"modalities": []any{"text", "audio"},
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": "hi",
+			},
+		},
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if _, _, _, err := ConvertChatCompletionsRequest(body, nil); err == nil {
+		t.Fatal("expected audio request to be rejected")
+	}
+}
+
+func TestConvertChatCompletionsRequest_InputAudioRejected(t *testing.T) {
+	req := map[string]any{
+		"model": "gpt-5.2",
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type": "input_audio",
+						"input_audio": map[string]any{
+							"data":   "abc",
+							"format": "wav",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if _, _, _, err := ConvertChatCompletionsRequest(body, nil); err == nil {
+		t.Fatal("expected input_audio request to be rejected")
 	}
 }
 
@@ -245,5 +529,49 @@ func TestChatCompletionFromResponses_CustomToolCallMapped(t *testing.T) {
 	}
 	if got, _ := fn["arguments"].(string); got != "*** Begin Patch\n*** End Patch\n" {
 		t.Fatalf("unexpected function arguments: %q", got)
+	}
+}
+
+func TestChatCompletionFromResponses_LogprobsMapped(t *testing.T) {
+	resp := map[string]any{
+		"id":    "resp_logprobs",
+		"model": "gpt-5.4",
+		"output": []any{
+			map[string]any{
+				"type": "message",
+				"content": []any{
+					map[string]any{
+						"type": "output_text",
+						"text": "Hello",
+						"logprobs": []any{
+							map[string]any{
+								"token":   "Hello",
+								"logprob": -0.1,
+								"bytes":   []any{72, 101, 108, 108, 111},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	chat := ChatCompletionFromResponses(resp, "")
+	choices, _ := chat["choices"].([]any)
+	if len(choices) != 1 {
+		t.Fatalf("expected 1 choice, got %d", len(choices))
+	}
+	choice, _ := choices[0].(map[string]any)
+	logprobs, _ := choice["logprobs"].(map[string]any)
+	if logprobs == nil {
+		t.Fatal("expected logprobs on choice")
+	}
+	content, _ := logprobs["content"].([]any)
+	if len(content) != 1 {
+		t.Fatalf("expected 1 logprob token, got %d", len(content))
+	}
+	token0, _ := content[0].(map[string]any)
+	if got, _ := token0["token"].(string); got != "Hello" {
+		t.Fatalf("expected token Hello, got %q", got)
 	}
 }

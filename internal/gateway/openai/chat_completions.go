@@ -14,6 +14,10 @@ func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]b
 		return nil, "", false, fmt.Errorf("invalid JSON: %w", err)
 	}
 
+	if hasUnsupportedAudioRequest(parsed) {
+		return nil, "", false, fmt.Errorf("audio is not yet supported by the Responses API")
+	}
+
 	model, _ := parsed["model"].(string)
 	model = NormalizeModel(model, modelMap)
 	if strings.TrimSpace(model) == "" {
@@ -26,7 +30,11 @@ func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]b
 	// Chat Completions uses "messages"; Responses uses "input".
 	if _, ok := parsed["input"]; !ok {
 		if messages, ok := parsed["messages"]; ok {
-			parsed["input"] = convertChatMessagesToResponsesInput(messages)
+			convertedInput, err := convertChatMessagesToResponsesInput(messages)
+			if err != nil {
+				return nil, "", false, err
+			}
+			parsed["input"] = convertedInput
 		}
 	}
 	delete(parsed, "messages")
@@ -60,16 +68,25 @@ func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]b
 		}
 		delete(parsed, "max_tokens")
 	}
-	if responseFormat, ok := parsed["response_format"]; ok {
-		textCfg, _ := parsed["text"].(map[string]any)
-		if textCfg == nil {
-			textCfg = map[string]any{}
-			parsed["text"] = textCfg
+	if maxCompletionTokens, ok := parsed["max_completion_tokens"]; ok {
+		if _, exists := parsed["max_output_tokens"]; !exists {
+			parsed["max_output_tokens"] = maxCompletionTokens
 		}
+		delete(parsed, "max_completion_tokens")
+	}
+	if responseFormat, ok := parsed["response_format"]; ok {
+		textCfg := ensureTextConfig(parsed)
 		if _, exists := textCfg["format"]; !exists {
 			textCfg["format"] = normalizeResponseFormatForResponses(responseFormat)
 		}
 		delete(parsed, "response_format")
+	}
+	if verbosity, ok := parsed["verbosity"]; ok {
+		textCfg := ensureTextConfig(parsed)
+		if _, exists := textCfg["verbosity"]; !exists {
+			textCfg["verbosity"] = verbosity
+		}
+		delete(parsed, "verbosity")
 	}
 	if reasoningEffort, ok := parsed["reasoning_effort"]; ok {
 		if effort, ok := reasoningEffort.(string); ok && strings.TrimSpace(effort) != "" {
@@ -84,7 +101,14 @@ func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]b
 		}
 		delete(parsed, "reasoning_effort")
 	}
-	delete(parsed, "stream_options")
+	if webSearchOptions, ok := parsed["web_search_options"]; ok {
+		mergeWebSearchOptionsIntoResponsesTools(parsed, webSearchOptions)
+		delete(parsed, "web_search_options")
+	}
+	if shouldIncludeLogprobs(parsed) {
+		addResponseInclude(parsed, "message.output_text.logprobs")
+	}
+	delete(parsed, "logprobs")
 
 	// Responses API currently returns a single output; drop unsupported multi-choice hint.
 	delete(parsed, "n")
@@ -94,6 +118,64 @@ func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]b
 		return nil, "", false, err
 	}
 	return converted, model, stream, nil
+}
+
+func hasUnsupportedAudioRequest(parsed map[string]any) bool {
+	if _, ok := parsed["audio"]; ok {
+		return true
+	}
+	if modalities, ok := parsed["modalities"].([]any); ok {
+		for _, item := range modalities {
+			if modality, _ := item.(string); strings.EqualFold(strings.TrimSpace(modality), "audio") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func ensureTextConfig(parsed map[string]any) map[string]any {
+	textCfg, _ := parsed["text"].(map[string]any)
+	if textCfg == nil {
+		textCfg = map[string]any{}
+		parsed["text"] = textCfg
+	}
+	return textCfg
+}
+
+func mergeWebSearchOptionsIntoResponsesTools(parsed map[string]any, raw any) {
+	var options map[string]any
+	if v, ok := raw.(map[string]any); ok {
+		options = v
+	}
+
+	tools, _ := parsed["tools"].([]any)
+	for _, item := range tools {
+		tool, _ := item.(map[string]any)
+		if tool == nil {
+			continue
+		}
+		toolType, _ := tool["type"].(string)
+		if toolType != "web_search" && toolType != "web_search_preview" {
+			continue
+		}
+		for key, value := range options {
+			if key == "type" {
+				continue
+			}
+			tool[key] = value
+		}
+		return
+	}
+
+	webSearchTool := map[string]any{"type": "web_search"}
+	for key, value := range options {
+		if key == "type" {
+			continue
+		}
+		webSearchTool[key] = value
+	}
+	parsed["tools"] = append(tools, webSearchTool)
 }
 
 func convertChatTools(rawTools any) []any {
@@ -214,6 +296,18 @@ func convertChatToolChoice(raw any) any {
 		if strings.TrimSpace(toolType) == "" {
 			toolType = "function"
 		}
+		if toolType == "allowed_tools" {
+			converted := map[string]any{
+				"type": toolType,
+			}
+			if mode, _ := v["mode"].(string); strings.TrimSpace(mode) != "" {
+				converted["mode"] = mode
+			}
+			if rawTools, ok := v["tools"]; ok {
+				converted["tools"] = convertChatTools(rawTools)
+			}
+			return converted
+		}
 		if toolType != "function" {
 			return v
 		}
@@ -262,10 +356,10 @@ func convertLegacyFunctionCall(raw any) any {
 	}
 }
 
-func convertChatMessagesToResponsesInput(rawMessages any) []any {
+func convertChatMessagesToResponsesInput(rawMessages any) ([]any, error) {
 	messages, _ := rawMessages.([]any)
 	if len(messages) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	result := make([]any, 0, len(messages))
@@ -288,7 +382,10 @@ func convertChatMessagesToResponsesInput(rawMessages any) []any {
 			continue
 		}
 
-		content := convertMessageContent(role, msg["content"])
+		content, err := convertMessageContent(role, msg["content"])
+		if err != nil {
+			return nil, err
+		}
 		hasContent := len(content) > 0
 
 		if hasContent || role != "assistant" {
@@ -314,7 +411,7 @@ func convertChatMessagesToResponsesInput(rawMessages any) []any {
 			}
 		}
 	}
-	return result
+	return result, nil
 }
 
 func convertToolMessageToFunctionCallOutput(msg map[string]any) (map[string]any, bool) {
@@ -375,18 +472,18 @@ func convertAssistantToolCalls(raw any) []any {
 	return out
 }
 
-func convertMessageContent(role string, raw any) []any {
+func convertMessageContent(role string, raw any) ([]any, error) {
 	switch v := raw.(type) {
 	case string:
 		if strings.TrimSpace(v) == "" {
-			return nil
+			return nil, nil
 		}
 		return []any{
 			map[string]any{
 				"type": roleTextPartType(role),
 				"text": v,
 			},
-		}
+		}, nil
 	case []any:
 		out := make([]any, 0, len(v))
 		for _, p := range v {
@@ -394,15 +491,18 @@ func convertMessageContent(role string, raw any) []any {
 			if part == nil {
 				continue
 			}
-			converted, ok := convertMessagePart(role, part)
+			converted, ok, err := convertMessagePart(role, part)
+			if err != nil {
+				return nil, err
+			}
 			if !ok {
 				continue
 			}
 			out = append(out, converted)
 		}
-		return out
+		return out, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
@@ -432,7 +532,7 @@ func extractMessageText(raw any) string {
 	}
 }
 
-func convertMessagePart(role string, part map[string]any) (map[string]any, bool) {
+func convertMessagePart(role string, part map[string]any) (map[string]any, bool, error) {
 	partType, _ := part["type"].(string)
 	partType = strings.TrimSpace(partType)
 
@@ -440,35 +540,96 @@ func convertMessagePart(role string, part map[string]any) (map[string]any, bool)
 	case "", "text":
 		text, _ := part["text"].(string)
 		if strings.TrimSpace(text) == "" {
-			return nil, false
+			return nil, false, nil
 		}
 		return map[string]any{
 			"type": roleTextPartType(role),
 			"text": text,
-		}, true
+		}, true, nil
 	case "input_text", "output_text", "summary_text", "refusal":
 		// Already in Responses-compatible shape.
-		return part, true
+		return part, true, nil
 	case "image_url":
 		if imageURL, ok := extractImageURL(part["image_url"]); ok {
-			return map[string]any{
+			converted := map[string]any{
 				"type":      "input_image",
 				"image_url": imageURL,
-			}, true
+			}
+			if detail, ok := extractImageDetail(part["image_url"], part["detail"]); ok {
+				converted["detail"] = detail
+			}
+			return converted, true, nil
 		}
-		return nil, false
+		return nil, false, nil
+	case "file":
+		converted, ok := convertFilePart(part)
+		return converted, ok, nil
+	case "input_audio":
+		return nil, false, fmt.Errorf("audio is not yet supported by the Responses API")
 	case "input_image", "input_file", "computer_screenshot":
-		return part, true
+		return part, true, nil
 	default:
 		// Best effort fallback for unknown text-like part.
 		if text, _ := part["text"].(string); strings.TrimSpace(text) != "" {
 			return map[string]any{
 				"type": roleTextPartType(role),
 				"text": text,
-			}, true
+			}, true, nil
 		}
+		return nil, false, nil
+	}
+}
+
+func convertFilePart(part map[string]any) (map[string]any, bool) {
+	file, _ := part["file"].(map[string]any)
+	if file == nil {
+		file = part
+	}
+
+	converted := map[string]any{
+		"type": "input_file",
+	}
+
+	for _, key := range []string{"file_id", "file_data", "file_url", "filename"} {
+		if value, ok := file[key]; ok {
+			converted[key] = value
+		}
+	}
+
+	if len(converted) == 1 {
 		return nil, false
 	}
+	return converted, true
+}
+
+func shouldIncludeLogprobs(parsed map[string]any) bool {
+	if topLogprobs, ok := parsed["top_logprobs"]; ok {
+		switch v := topLogprobs.(type) {
+		case float64:
+			return v > 0
+		case int:
+			return v > 0
+		case int64:
+			return v > 0
+		}
+	}
+	if logprobs, ok := parsed["logprobs"].(bool); ok {
+		return logprobs
+	}
+	return false
+}
+
+func addResponseInclude(parsed map[string]any, value string) {
+	if strings.TrimSpace(value) == "" {
+		return
+	}
+	include, _ := parsed["include"].([]any)
+	for _, item := range include {
+		if existing, _ := item.(string); existing == value {
+			return
+		}
+	}
+	parsed["include"] = append(include, value)
 }
 
 func roleTextPartType(role string) string {
@@ -496,6 +657,21 @@ func extractImageURL(raw any) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func extractImageDetail(raw any, fallback any) (string, bool) {
+	if detail, ok := fallback.(string); ok && strings.TrimSpace(detail) != "" {
+		return detail, true
+	}
+	v, _ := raw.(map[string]any)
+	if v == nil {
+		return "", false
+	}
+	detail, _ := v["detail"].(string)
+	if strings.TrimSpace(detail) == "" {
+		return "", false
+	}
+	return detail, true
 }
 
 func ChatCompletionFromResponses(resp map[string]any, fallbackModel string) map[string]any {
@@ -547,10 +723,54 @@ func ChatCompletionFromResponses(resp map[string]any, fallbackModel string) map[
 		},
 	}
 
+	if logprobs := extractChatLogprobs(resp); len(logprobs) > 0 {
+		choices, _ := out["choices"].([]any)
+		if len(choices) > 0 {
+			choice, _ := choices[0].(map[string]any)
+			if choice != nil {
+				choice["logprobs"] = map[string]any{
+					"content": logprobs,
+				}
+			}
+		}
+	}
+
 	if usage := mapUsage(resp["usage"]); len(usage) > 0 {
 		out["usage"] = usage
 	}
 
+	return out
+}
+
+func extractChatLogprobs(resp map[string]any) []any {
+	output, _ := resp["output"].([]any)
+	if len(output) == 0 {
+		return nil
+	}
+
+	var out []any
+	for _, item := range output {
+		itemMap, _ := item.(map[string]any)
+		if itemMap == nil {
+			continue
+		}
+		content, _ := itemMap["content"].([]any)
+		for _, rawPart := range content {
+			part, _ := rawPart.(map[string]any)
+			if part == nil {
+				continue
+			}
+			partType, _ := part["type"].(string)
+			if partType != "output_text" {
+				continue
+			}
+			logprobs, _ := part["logprobs"].([]any)
+			if len(logprobs) == 0 {
+				continue
+			}
+			out = append(out, logprobs...)
+		}
+	}
 	return out
 }
 

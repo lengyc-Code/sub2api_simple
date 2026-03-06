@@ -11,9 +11,11 @@ func TestPrepareBody_OAuthParamAdaptation(t *testing.T) {
 		"stream":                 false,
 		"store":                  true,
 		"metadata":               map[string]any{"trace_id": "abc"},
+		"max_completion_tokens":  float64(128),
 		"prompt_cache_retention": "24h",
 		"stream_options":         map[string]any{"include_usage": true},
 		"user":                   "user_123",
+		"verbosity":              "medium",
 		"reasoning_effort":       "minimal",
 		"response_format": map[string]any{
 			"type": "json_object",
@@ -40,14 +42,20 @@ func TestPrepareBody_OAuthParamAdaptation(t *testing.T) {
 		t.Fatalf("expected stream=true, got %v", got["stream"])
 	}
 
-	if _, ok := got["metadata"]; ok {
-		t.Fatal("expected metadata to be removed for OAuth compatibility")
+	if metadata, _ := got["metadata"].(map[string]any); metadata == nil {
+		t.Fatal("expected metadata preserved")
 	}
 	if _, ok := got["prompt_cache_retention"]; ok {
 		t.Fatal("expected prompt_cache_retention to be removed for OAuth compatibility")
 	}
-	if _, ok := got["stream_options"]; ok {
-		t.Fatal("expected stream_options to be removed")
+	if streamOptions, _ := got["stream_options"].(map[string]any); streamOptions == nil {
+		t.Fatal("expected stream_options preserved")
+	}
+	if gotMax, _ := got["max_output_tokens"].(float64); gotMax != 128 {
+		t.Fatalf("expected max_output_tokens=128, got %v", got["max_output_tokens"])
+	}
+	if _, ok := got["max_completion_tokens"]; ok {
+		t.Fatal("expected max_completion_tokens removed")
 	}
 
 	if _, ok := got["reasoning_effort"]; ok {
@@ -74,6 +82,9 @@ func TestPrepareBody_OAuthParamAdaptation(t *testing.T) {
 	}
 	if typ, _ := format["type"].(string); typ != "json_object" {
 		t.Fatalf("expected text.format.type=json_object, got %q", typ)
+	}
+	if gotVerbosity, _ := textCfg["verbosity"].(string); gotVerbosity != "medium" {
+		t.Fatalf("expected text.verbosity=medium, got %q", gotVerbosity)
 	}
 
 	if _, ok := got["user"]; ok {
