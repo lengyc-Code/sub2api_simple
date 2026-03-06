@@ -12,6 +12,10 @@ func TestPrepareBody_OAuthParamAdaptation(t *testing.T) {
 		"store":                  true,
 		"metadata":               map[string]any{"trace_id": "abc"},
 		"max_completion_tokens":  float64(128),
+		"temperature":            float64(0.7),
+		"top_p":                  float64(0.9),
+		"frequency_penalty":      float64(0.2),
+		"presence_penalty":       float64(0.1),
 		"prompt_cache_retention": "24h",
 		"stream_options":         map[string]any{"include_usage": true},
 		"user":                   "user_123",
@@ -44,6 +48,11 @@ func TestPrepareBody_OAuthParamAdaptation(t *testing.T) {
 
 	if metadata, _ := got["metadata"].(map[string]any); metadata == nil {
 		t.Fatal("expected metadata preserved")
+	}
+	for _, key := range []string{"temperature", "top_p", "frequency_penalty", "presence_penalty"} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("expected %s removed for OAuth compatibility", key)
+		}
 	}
 	if _, ok := got["prompt_cache_retention"]; ok {
 		t.Fatal("expected prompt_cache_retention to be removed for OAuth compatibility")
