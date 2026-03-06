@@ -66,15 +66,17 @@ const (
 )
 
 var openaiModels = []map[string]string{
+	{"id": "gpt-5.4", "type": "model", "display_name": "GPT-5.4", "created_at": "2026-03-06T00:00:00Z"},
 	{"id": "gpt-5.3-codex", "type": "model", "display_name": "GPT-5.3 Codex", "created_at": "2026-02-01T00:00:00Z"},
 	{"id": "gpt-5.2", "type": "model", "display_name": "GPT-5.2", "created_at": "2025-12-01T00:00:00Z"},
 	{"id": "gpt-5.2-codex", "type": "model", "display_name": "GPT-5.2 Codex", "created_at": "2025-12-01T00:00:00Z"},
-	{"id": "gpt-5.1-codex", "type": "model", "display_name": "GPT-5.1 Codex", "created_at": "2025-10-01T00:00:00Z"},
+	{"id": "gpt-5.1-codex-max", "type": "model", "display_name": "GPT-5.1 Codex Max", "created_at": "2025-10-01T00:00:00Z"},
 	{"id": "gpt-5.1-codex-mini", "type": "model", "display_name": "GPT-5.1 Codex Mini", "created_at": "2025-10-01T00:00:00Z"},
 }
 
 // codexModelMap normalizes various Codex model aliases to canonical upstream model names.
 var codexModelMap = map[string]string{
+	"gpt-5.4":            "gpt-5.4",
 	"gpt-5.3":            "gpt-5.3-codex",
 	"gpt-5.3-none":       "gpt-5.3-codex",
 	"gpt-5.3-low":        "gpt-5.3-codex",
@@ -91,16 +93,4 @@ var codexModelMap = map[string]string{
 	"gpt-5-codex":        "gpt-5.1-codex",
 	"gpt-5-codex-mini":   "gpt-5.1-codex-mini",
 	"gpt-5":              "gpt-5.1",
-}
-
-// openaiAllowedHeaders is the whitelist of headers forwarded to the OpenAI upstream.
-var openaiAllowedHeaders = map[string]bool{
-	"accept-language":       true,
-	"content-type":          true,
-	"conversation_id":       true,
-	"user-agent":            true,
-	"originator":            true,
-	"session_id":            true,
-	"x-codex-turn-state":    true,
-	"x-codex-turn-metadata": true,
 }
