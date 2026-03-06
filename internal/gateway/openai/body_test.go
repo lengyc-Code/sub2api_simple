@@ -99,8 +99,8 @@ func TestPrepareBody_OAuthParamAdaptation(t *testing.T) {
 	if _, ok := got["user"]; ok {
 		t.Fatal("expected user to be removed")
 	}
-	if sid, _ := got["safety_identifier"].(string); sid != "user_123" {
-		t.Fatalf("expected safety_identifier=user_123, got %q", sid)
+	if _, ok := got["safety_identifier"]; ok {
+		t.Fatal("expected safety_identifier removed for OAuth compatibility")
 	}
 }
 

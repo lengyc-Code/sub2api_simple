@@ -80,6 +80,7 @@ func PrepareBody(body []byte, opts PrepareOptions) []byte {
 			"temperature", "top_p",
 			"frequency_penalty", "presence_penalty",
 			"metadata",
+			"safety_identifier",
 			"max_completion_tokens", "user",
 			"prompt_cache_retention",
 		} {
