@@ -60,8 +60,8 @@ func TestPrepareBody_OAuthParamAdaptation(t *testing.T) {
 	if _, ok := got["stream_options"]; ok {
 		t.Fatal("expected stream_options removed for OAuth compatibility")
 	}
-	if gotMax, _ := got["max_output_tokens"].(float64); gotMax != 128 {
-		t.Fatalf("expected max_output_tokens=128, got %v", got["max_output_tokens"])
+	if _, ok := got["max_output_tokens"]; ok {
+		t.Fatal("expected max_output_tokens removed for OAuth compatibility")
 	}
 	if _, ok := got["max_completion_tokens"]; ok {
 		t.Fatal("expected max_completion_tokens removed")

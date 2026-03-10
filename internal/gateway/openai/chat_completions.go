@@ -8,14 +8,14 @@ import (
 )
 
 // ConvertChatCompletionsRequest maps OpenAI Chat Completions payload to Responses API payload.
-func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]byte, string, bool, error) {
+func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]byte, string, bool, bool, error) {
 	var parsed map[string]any
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, "", false, fmt.Errorf("invalid JSON: %w", err)
+		return nil, "", false, false, fmt.Errorf("invalid JSON: %w", err)
 	}
 
 	if hasUnsupportedAudioRequest(parsed) {
-		return nil, "", false, fmt.Errorf("audio is not yet supported by the Responses API")
+		return nil, "", false, false, fmt.Errorf("audio is not yet supported by the Responses API")
 	}
 
 	model, _ := parsed["model"].(string)
@@ -26,13 +26,14 @@ func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]b
 	parsed["model"] = model
 
 	stream, _ := parsed["stream"].(bool)
+	includeUsage := streamOptionsIncludeUsage(parsed["stream_options"])
 
 	// Chat Completions uses "messages"; Responses uses "input".
 	if _, ok := parsed["input"]; !ok {
 		if messages, ok := parsed["messages"]; ok {
 			convertedInput, err := convertChatMessagesToResponsesInput(messages)
 			if err != nil {
-				return nil, "", false, err
+				return nil, "", false, false, err
 			}
 			parsed["input"] = convertedInput
 		}
@@ -115,9 +116,9 @@ func ConvertChatCompletionsRequest(body []byte, modelMap map[string]string) ([]b
 
 	converted, err := json.Marshal(parsed)
 	if err != nil {
-		return nil, "", false, err
+		return nil, "", false, false, err
 	}
-	return converted, model, stream, nil
+	return converted, model, stream, includeUsage, nil
 }
 
 func hasUnsupportedAudioRequest(parsed map[string]any) bool {
@@ -632,6 +633,15 @@ func addResponseInclude(parsed map[string]any, value string) {
 	parsed["include"] = append(include, value)
 }
 
+func streamOptionsIncludeUsage(raw any) bool {
+	streamOptions, _ := raw.(map[string]any)
+	if streamOptions == nil {
+		return false
+	}
+	includeUsage, _ := streamOptions["include_usage"].(bool)
+	return includeUsage
+}
+
 func roleTextPartType(role string) string {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case "assistant":
@@ -872,6 +882,30 @@ func ChatCompletionChunk(id, model string, created int64, delta map[string]any, 
 			},
 		},
 	}
+}
+
+func ChatCompletionUsageChunk(id, model string, created int64, usage any) map[string]any {
+	if id == "" {
+		id = fmt.Sprintf("chatcmpl_%d", time.Now().UnixNano())
+	}
+	if created <= 0 {
+		created = time.Now().Unix()
+	}
+	if model == "" {
+		model = "gpt-5.2"
+	}
+
+	chunk := map[string]any{
+		"id":      id,
+		"object":  "chat.completion.chunk",
+		"created": created,
+		"model":   model,
+		"choices": []any{},
+	}
+	if mappedUsage := mapUsage(usage); len(mappedUsage) > 0 {
+		chunk["usage"] = mappedUsage
+	}
+	return chunk
 }
 
 func ExtractResponseText(resp map[string]any) string {

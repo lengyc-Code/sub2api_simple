@@ -51,7 +51,7 @@ func TestConvertChatCompletionsRequest_ToolCallRoundTripInputs(t *testing.T) {
 		t.Fatalf("marshal request: %v", err)
 	}
 
-	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	convertedBody, _, _, _, err := ConvertChatCompletionsRequest(body, nil)
 	if err != nil {
 		t.Fatalf("convert request: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestConvertChatCompletionsRequest_ResponseFormatJSONSchemaMapped(t *testing
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	convertedBody, _, _, _, err := ConvertChatCompletionsRequest(body, nil)
 	if err != nil {
 		t.Fatalf("convert request: %v", err)
 	}
@@ -172,9 +172,12 @@ func TestConvertChatCompletionsRequest_ReasoningAndStreamOptionsCompat(t *testin
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	convertedBody, _, _, includeUsage, err := ConvertChatCompletionsRequest(body, nil)
 	if err != nil {
 		t.Fatalf("convert request: %v", err)
+	}
+	if !includeUsage {
+		t.Fatal("expected include_usage=true to be detected")
 	}
 
 	var converted map[string]any
@@ -225,7 +228,7 @@ func TestConvertChatCompletionsRequest_MaxCompletionTokensVerbosityAndWebSearchM
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	convertedBody, _, _, _, err := ConvertChatCompletionsRequest(body, nil)
 	if err != nil {
 		t.Fatalf("convert request: %v", err)
 	}
@@ -300,7 +303,7 @@ func TestConvertChatCompletionsRequest_FileAndImageContentMapped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	convertedBody, _, _, _, err := ConvertChatCompletionsRequest(body, nil)
 	if err != nil {
 		t.Fatalf("convert request: %v", err)
 	}
@@ -354,7 +357,7 @@ func TestConvertChatCompletionsRequest_LogprobsMappedToInclude(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	convertedBody, _, _, _, err := ConvertChatCompletionsRequest(body, nil)
 	if err != nil {
 		t.Fatalf("convert request: %v", err)
 	}
@@ -406,7 +409,7 @@ func TestConvertChatCompletionsRequest_AllowedToolsToolChoiceMapped(t *testing.T
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	convertedBody, _, _, err := ConvertChatCompletionsRequest(body, nil)
+	convertedBody, _, _, _, err := ConvertChatCompletionsRequest(body, nil)
 	if err != nil {
 		t.Fatalf("convert request: %v", err)
 	}
@@ -449,7 +452,7 @@ func TestConvertChatCompletionsRequest_AudioRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	if _, _, _, err := ConvertChatCompletionsRequest(body, nil); err == nil {
+	if _, _, _, _, err := ConvertChatCompletionsRequest(body, nil); err == nil {
 		t.Fatal("expected audio request to be rejected")
 	}
 }
@@ -477,8 +480,70 @@ func TestConvertChatCompletionsRequest_InputAudioRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	if _, _, _, err := ConvertChatCompletionsRequest(body, nil); err == nil {
+	if _, _, _, _, err := ConvertChatCompletionsRequest(body, nil); err == nil {
 		t.Fatal("expected input_audio request to be rejected")
+	}
+}
+
+func TestChatCompletionFromResponses_UsageMapped(t *testing.T) {
+	resp := map[string]any{
+		"id":    "resp_usage",
+		"model": "gpt-5.4",
+		"usage": map[string]any{
+			"input_tokens":  11,
+			"output_tokens": 7,
+		},
+		"output": []any{
+			map[string]any{
+				"type": "message",
+				"content": []any{
+					map[string]any{
+						"type": "output_text",
+						"text": "Hello",
+					},
+				},
+			},
+		},
+	}
+
+	chat := ChatCompletionFromResponses(resp, "")
+	usage, _ := chat["usage"].(map[string]any)
+	if usage == nil {
+		t.Fatal("expected usage on chat completion")
+	}
+	if got, _ := usage["prompt_tokens"].(int64); got != 11 {
+		t.Fatalf("expected prompt_tokens=11, got %v", usage["prompt_tokens"])
+	}
+	if got, _ := usage["completion_tokens"].(int64); got != 7 {
+		t.Fatalf("expected completion_tokens=7, got %v", usage["completion_tokens"])
+	}
+	if got, _ := usage["total_tokens"].(int64); got != 18 {
+		t.Fatalf("expected total_tokens=18, got %v", usage["total_tokens"])
+	}
+}
+
+func TestChatCompletionUsageChunk_UsageMapped(t *testing.T) {
+	chunk := ChatCompletionUsageChunk("chatcmpl_usage", "gpt-5.4", 1772773416, map[string]any{
+		"input_tokens":  5,
+		"output_tokens": 3,
+	})
+
+	choices, _ := chunk["choices"].([]any)
+	if len(choices) != 0 {
+		t.Fatalf("expected empty choices, got %d", len(choices))
+	}
+	usage, _ := chunk["usage"].(map[string]any)
+	if usage == nil {
+		t.Fatal("expected usage on usage chunk")
+	}
+	if got, _ := usage["prompt_tokens"].(int64); got != 5 {
+		t.Fatalf("expected prompt_tokens=5, got %v", usage["prompt_tokens"])
+	}
+	if got, _ := usage["completion_tokens"].(int64); got != 3 {
+		t.Fatalf("expected completion_tokens=3, got %v", usage["completion_tokens"])
+	}
+	if got, _ := usage["total_tokens"].(int64); got != 8 {
+		t.Fatalf("expected total_tokens=8, got %v", usage["total_tokens"])
 	}
 }
 

@@ -32,7 +32,7 @@ func (g *Gateway) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	responsesBody, model, stream, err := openaihandler.ConvertChatCompletionsRequest(body, codexModelMap)
+	responsesBody, model, stream, includeUsage, err := openaihandler.ConvertChatCompletionsRequest(body, codexModelMap)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
@@ -41,7 +41,7 @@ func (g *Gateway) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Req
 	authToken := extractBearerToken(r)
 	sessionKey := computeSessionHash(platformOpenAI, authToken, model)
 
-	g.forwardOpenAIChatCompletionsWithFailover(w, r, model, stream, responsesBody, sessionKey)
+	g.forwardOpenAIChatCompletionsWithFailover(w, r, model, stream, includeUsage, responsesBody, sessionKey)
 }
 
 func (g *Gateway) forwardOpenAIChatCompletionsWithFailover(
@@ -49,6 +49,7 @@ func (g *Gateway) forwardOpenAIChatCompletionsWithFailover(
 	r *http.Request,
 	model string,
 	stream bool,
+	includeUsage bool,
 	body []byte,
 	sessionKey string,
 ) {
@@ -121,7 +122,7 @@ func (g *Gateway) forwardOpenAIChatCompletionsWithFailover(
 		shouldStreamUpstream := stream || account.IsOpenAIOAuth()
 		if forwarder.ShouldHandleAsStreamingResponse(shouldStreamUpstream, resp.Header.Get("Content-Type")) {
 			if stream {
-				g.handleOpenAIChatCompletionsStreamingResponse(w, resp, account, model)
+				g.handleOpenAIChatCompletionsStreamingResponse(w, resp, account, model, includeUsage)
 				return
 			}
 			g.handleOpenAIChatCompletionsSSEAsNonStreamingResponse(w, resp, account, model)
@@ -129,7 +130,7 @@ func (g *Gateway) forwardOpenAIChatCompletionsWithFailover(
 		}
 
 		if stream {
-			g.handleOpenAIChatCompletionsJSONAsStreamingResponse(w, resp, account, model)
+			g.handleOpenAIChatCompletionsJSONAsStreamingResponse(w, resp, account, model, includeUsage)
 			return
 		}
 		g.handleOpenAIChatCompletionsJSONAsNonStreamingResponse(w, resp, account, model)
@@ -211,6 +212,7 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsStreamingResponse(
 	resp *http.Response,
 	account *Account,
 	model string,
+	includeUsage bool,
 ) {
 	defer resp.Body.Close()
 	defer account.ReleaseSlot()
@@ -244,6 +246,7 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsStreamingResponse(
 
 	content := ""
 	toolCalls := extractToolCallsFromChatCompletion(chatResp)
+	usage := extractUsageFromChatCompletion(chatResp)
 	if choices, ok := chatResp["choices"].([]any); ok && len(choices) > 0 {
 		if choice, ok := choices[0].(map[string]any); ok {
 			if message, ok := choice["message"].(map[string]any); ok {
@@ -306,6 +309,10 @@ func (g *Gateway) handleOpenAIChatCompletionsJSONAsStreamingResponse(
 
 	_ = g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
 		chatID, chatModel, created, map[string]any{}, finishReason), account, model)
+	if includeUsage && len(usage) > 0 {
+		_ = g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionUsageChunk(
+			chatID, chatModel, created, usage), account, model)
+	}
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }
@@ -315,6 +322,7 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 	resp *http.Response,
 	account *Account,
 	model string,
+	includeUsage bool,
 ) {
 	defer resp.Body.Close()
 	defer account.ReleaseSlot()
@@ -372,7 +380,7 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 	timer := time.NewTimer(streamTimeout)
 	defer timer.Stop()
 
-	emitFinish := func(reason string) {
+	emitFinish := func(reason string, usage map[string]any) {
 		if finished {
 			return
 		}
@@ -382,6 +390,10 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 		finished = true
 		_ = g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionChunk(
 			chatID, chatModel, created, map[string]any{}, reason), account, model)
+		if includeUsage && len(usage) > 0 {
+			_ = g.writeChatCompletionSSEChunk(w, openaihandler.ChatCompletionUsageChunk(
+				chatID, chatModel, created, usage), account, model)
+		}
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	}
@@ -432,10 +444,10 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 			return
 		}
 		if emitToolCalls(toolCallAccumulator.ToolCalls()) {
-			emitFinish("tool_calls")
+			emitFinish("tool_calls", nil)
 			return
 		}
-		emitFinish(defaultReason)
+		emitFinish(defaultReason, nil)
 	}
 
 	for {
@@ -529,6 +541,7 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 				}
 				chatResp := openaihandler.ChatCompletionFromResponses(respObj, chatModel)
 				toolCalls := extractToolCallsFromChatCompletion(chatResp)
+				usage := extractUsageFromChatCompletion(chatResp)
 				if len(toolCalls) == 0 {
 					toolCalls = toolCallAccumulator.ToolCalls()
 				}
@@ -536,10 +549,10 @@ func (g *Gateway) handleOpenAIChatCompletionsStreamingResponse(
 					if !emitToolCalls(toolCalls) {
 						return
 					}
-					emitFinish("tool_calls")
+					emitFinish("tool_calls", usage)
 					return
 				}
-				emitFinish("stop")
+				emitFinish("stop", usage)
 				return
 			case "response.output_text.done":
 				// output_text.done only means the current text block ended.
@@ -820,4 +833,12 @@ func extractToolCallsFromChatCompletion(chatResp map[string]any) []map[string]st
 		})
 	}
 	return out
+}
+
+func extractUsageFromChatCompletion(chatResp map[string]any) map[string]any {
+	usage, _ := chatResp["usage"].(map[string]any)
+	if len(usage) == 0 {
+		return nil
+	}
+	return usage
 }
