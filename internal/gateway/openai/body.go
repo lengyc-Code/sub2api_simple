@@ -84,6 +84,7 @@ func PrepareBody(body []byte, opts PrepareOptions) []byte {
 			"stream_options",
 			"max_completion_tokens", "user",
 			"prompt_cache_retention",
+			"max_output_tokens",
 		} {
 			if _, ok := parsed[key]; ok {
 				delete(parsed, key)
